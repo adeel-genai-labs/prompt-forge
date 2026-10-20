@@ -6,8 +6,8 @@ Phone: +1 555-010-0199
 Alt phone: (555) 010-0142
 Card number: 4111 1111 1111 1111
 US SSN: 123-45-6789
-UK National Insurance number: QQ 12 34 56 C
-Indian Aadhaar: 2345 6789 0123
-Indian PAN: ABCDE1234F
+UK National Insurance number: AB 12 34 56 C
+Indian Aadhaar: 2345 6789 0124
+Indian PAN: ABCPE1234F
 
 Order 100245 shipped on 2026-10-02, total 1299.50 — these ordinary numbers should NOT be redacted.

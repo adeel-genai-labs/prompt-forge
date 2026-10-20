@@ -20,10 +20,45 @@ def test_target_has_all_fields_filled_in(key):
     assert len(set(target["required_sections"])) == len(target["required_sections"])
 
 
-def test_data_analytics_defaults_to_databricks_sql_and_mentions_pyspark():
-    guidance = TARGETS["data_analytics"]["guidance"]
-    assert "Databricks SQL" in guidance
-    assert "PySpark" in guidance
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "operating system, shell",
+        "language and framework versions",
+        "work incrementally",
+        "one module at a time",
+        "'Do not' list",
+        "do not run git commands",
+        "do not add new dependencies without asking",
+        "do not modify unrelated files",
+        "run the tests, show the results and list every file changed",
+        "stop and ask before making ambiguous",
+    ],
+)
+def test_coding_agent_guidance_covers_key_practices(phrase):
+    assert phrase in TARGETS["coding_agent"]["guidance"]
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "Databricks SQL",
+        "PySpark",
+        "catalog.schema.table",
+        "read-only by default",
+        "MERGE",
+        "idempotent",
+        "avoid SELECT *",
+        "LIMIT while exploring",
+        "nulls and duplicates",
+        "grain",
+        "time zone",
+        "row counts",
+        "reconcile",
+    ],
+)
+def test_data_analytics_guidance_covers_key_practices(phrase):
+    assert phrase in TARGETS["data_analytics"]["guidance"]
 
 
 def test_image_generation_guidance_asks_for_negative_prompt():

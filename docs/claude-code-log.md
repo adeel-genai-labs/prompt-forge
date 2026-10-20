@@ -128,3 +128,40 @@
 
 **Next steps:**
 - Implement guardrails.py with tests.
+
+## 2026-10-20 — Sharpen target guidance + implement guardrails
+
+**Goal:** (1) Make the coding_agent and data_analytics guidance stricter. (2) Implement src/guardrails.py fully, with tests.
+
+**Files changed:**
+- src/targets.py: rewrote coding_agent guidance (environment, incremental work, "Do not" list, verification output, ask before ambiguous decisions) and data_analytics guidance (Unity Catalog names, read-only by default, MERGE for idempotent writes, avoid SELECT *, LIMIT while exploring, nulls/duplicates, grain and time zone, validation queries). Structure unchanged.
+- src/guardrails.py: implemented every function; added MAX_GOAL_CHARS, SELF_HARM_MESSAGE, INJECTION_PHRASES, PII_PATTERNS, SECRET_PATTERNS, Verhoeff tables, plus helpers `matching_phrases`, `luhn_valid`, `verhoeff_valid`, `has_phone_length`. `check_content` now takes `max_chars`.
+- tests/test_targets.py: phrase checks for the new guidance (23 cases)
+- tests/test_guardrails.py: new (69 cases)
+- samples/pii_sample.txt: UK NI `QQ…` → `AB 12 34 56 C`, PAN `ABCDE1234F` → `ABCPE1234F`, Aadhaar `2345 6789 0123` → `2345 6789 0124`
+- samples/README.md: note that the fake IDs are well-formed
+
+**Commands run:**
+- `.venv\Scripts\python.exe -m pytest -v`: 122 passed
+- redact_pii on samples/pii_sample.txt: all 8 items redacted (EMAIL 1, PHONE 2, CARD 1, US_SSN 1, UK_NI 1, AADHAAR 1, PAN 1); order number, date and total untouched
+- find_injection_attempts on samples/injection_sample.txt: ['ignore previous instructions', 'reveal your system prompt']
+
+**Result:** extractors, schema, targets and guardrails are done and tested. generator and app are still stubs.
+
+**Issues & fixes:**
+- "Ordinary 12-digit order number must not be flagged", but Aadhaar is 12 digits with optional separators → a regex alone can't tell them apart → validate with the Verhoeff checksum (the official Aadhaar check digit), just as cards use Luhn. A random 12-digit number still passes about 1 time in 10.
+- The old sample IDs were not well-formed (QQ is not a valid NI prefix; the 4th PAN letter must be a holder type; the Aadhaar failed Verhoeff) → the precise patterns rightly ignored them → replaced with well-formed fake values.
+- The Write tool refused guardrails.py because it had been edited with a script earlier → stale file state → re-read, then wrote.
+
+**Decisions:**
+- PII patterns run in a fixed order with PHONE last, so its loose digit groups don't swallow card, SSN or Aadhaar numbers.
+- PHONE requires separators and 10–15 digits; `.` is not a separator, so IP addresses, versions and dates aren't redacted. Unformatted runs like `5550100199` are not caught; precision over recall, as agreed.
+- US_SSN requires hyphens and excludes invalid ranges (000, 666, 9xx, 00, 0000). UK_NI and PAN use the official letter rules.
+- One helper, `matching_phrases`, serves blocked topics, image requests and injection detection: whole words, case-insensitive, any whitespace between words.
+- check_output compares section names case-insensitively, because models vary capitalisation.
+- Secret messages name the kind of secret but never echo it. Test secrets are built from parts so secret scanners don't flag the test file.
+- check_pdf_pages also rejects password-protected PDFs, since extraction would return nothing.
+- check_output does not require a negative_prompt for image_generation (not requested; easy to add).
+
+**Next steps:**
+- Implement generator.py: get_provider, build_system_prompt(target), parse_response, call_ollama, call_anthropic, describe_image, generate_prompt, with mocked-client tests.
