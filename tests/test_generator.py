@@ -346,3 +346,177 @@ def test_call_anthropic_sends_system_and_user_text(monkeypatch):
     assert sent["system"] == "system"
     assert sent["temperature"] == generator.TEMPERATURE
     assert sent["messages"] == [{"role": "user", "content": "Build the prompt."}]
+
+
+# --- answers to clarifying questions ---
+
+ANSWERS = [
+    {"question": "Revenue: gross or net?", "answer": "Net", "confirmed": True},
+    {"question": "Time zone?", "answer": "UTC", "confirmed": False},
+]
+
+
+def test_user_message_states_confirmed_answers_as_facts_and_lists_defaults_separately():
+    user = generator.build_user_message("", "Monthly revenue by region", answers=ANSWERS)
+    facts, defaults = user.split("I left these on the suggested default")
+    assert "I confirmed these answers. State them as facts in the spec, not as assumptions:" in facts
+    assert "- Revenue: gross or net? Net" in facts
+    assert "Time zone?" not in facts
+    assert "- Time zone? UTC" in defaults
+
+
+def test_user_message_answers_are_outside_the_data_blocks():
+    user = generator.build_user_message("notes", "Monthly revenue", schema_text="main.a.b: id int", answers=ANSWERS)
+    assert user.rindex("</user_content>") < user.index("I confirmed these answers")
+
+
+def test_generate_prompt_passes_answers_and_adds_unconfirmed_defaults_to_assumptions(fake_ollama):
+    fake_ollama.replies = [valid_json()]
+    prompt = generator.generate_prompt("", goal="Monthly revenue by region", answers=ANSWERS)
+    assert "I confirmed these answers" in fake_ollama.calls[0]["user"]
+    assert prompt.assumptions == ["Months are UTC calendar months", "Time zone? UTC (default, not confirmed)"]
+    assert not any("Net" in item for item in prompt.assumptions)  # confirmed answers aren't assumptions
+
+
+def test_add_unconfirmed_defaults_does_not_duplicate():
+    prompt = GeneratedPrompt.model_validate_json(valid_json(assumptions=["Time zone? UTC (default, not confirmed)"]))
+    assert generator.add_unconfirmed_defaults(prompt, ANSWERS).assumptions == ["Time zone? UTC (default, not confirmed)"]
+
+
+def test_generate_prompt_without_answers_adds_nothing(fake_ollama):
+    fake_ollama.replies = [valid_json()]
+    prompt = generator.generate_prompt("", goal="Monthly revenue by region", answers=None)
+    assert prompt.assumptions == ["Months are UTC calendar months"]
+    assert "I confirmed" not in fake_ollama.calls[0]["user"]
+
+
+def test_user_message_wraps_schema_as_data_before_notes():
+    user = generator.build_user_message("need a report", "Revenue", schema_text="main.sales.orders: id bigint")
+    assert f"{generator.SCHEMA_LABEL}\n\n<user_content>\nmain.sales.orders: id bigint\n</user_content>" in user
+    assert user.index(generator.SCHEMA_LABEL) < user.index(generator.NOTES_LABEL)
+    assert generator.NO_CONTENT_NOTE not in user
+
+
+def test_schema_only_input_does_not_use_the_no_content_note():
+    user = generator.build_user_message("", "Revenue", schema_text="main.sales.orders: id bigint")
+    assert generator.NO_CONTENT_NOTE not in user
+
+
+# --- clarifying questions ---
+
+
+def question(**changes) -> dict:
+    """Return one valid clarifying question dict, with optional overrides."""
+    item = {"question": "Revenue: gross or net?", "why": "Changes the metric.", "options": ["Gross", "Net"], "default": "Net"}
+    return {**item, **changes}
+
+
+def questions_json(*items) -> str:
+    return json.dumps({"questions": list(items)})
+
+
+def test_ask_clarifying_questions_returns_validated_dicts(fake_ollama):
+    fake_ollama.replies = [questions_json(question(), question(question="Time zone?", options=["UTC", "Local"], default="UTC"))]
+    result = generator.ask_clarifying_questions("Monthly revenue", "", "")
+    assert result == [question(), question(question="Time zone?", options=["UTC", "Local"], default="UTC")]
+    assert fake_ollama.calls[0]["json_schema"] == generator.CLARIFY_JSON_SCHEMA
+
+
+def test_ask_clarifying_questions_returns_empty_list_when_nothing_is_missing(fake_ollama):
+    fake_ollama.replies = ['```json\n{"questions": []}\n```']
+    assert generator.ask_clarifying_questions("Monthly revenue", "", "main.a.b: id int") == []
+
+
+def test_ask_clarifying_questions_keeps_at_most_four(fake_ollama):
+    fake_ollama.replies = [questions_json(*[question(question=f"Q{n}?") for n in range(6)])]
+    result = generator.ask_clarifying_questions("Monthly revenue", "", "")
+    assert [item["question"] for item in result] == ["Q0?", "Q1?", "Q2?", "Q3?"]
+
+
+def test_default_not_in_options_falls_back_to_first_option(fake_ollama):
+    fake_ollama.replies = [questions_json(question(default="Net revenue"))]
+    assert generator.ask_clarifying_questions("Monthly revenue", "", "")[0]["default"] == "Gross"
+
+
+@pytest.mark.parametrize(
+    "bad_reply",
+    [
+        "not json",
+        "[1, 2]",
+        '{"questions": "none"}',
+        questions_json(question(options=["Only one"])),
+        questions_json(question(options=["a", "b", "c", "d", "e"])),
+        questions_json({"question": "No options?"}),
+    ],
+)
+def test_invalid_reply_is_retried_once(fake_ollama, bad_reply):
+    fake_ollama.replies = [bad_reply, questions_json(question())]
+    assert generator.ask_clarifying_questions("Monthly revenue", "", "") == [question()]
+    assert generator.JSON_REMINDER in fake_ollama.calls[1]["user"]
+
+
+def test_two_invalid_replies_give_friendly_error(fake_ollama):
+    fake_ollama.replies = ["not json", '{"questions": "none"}']
+    with pytest.raises(ValueError, match="couldn't prepare clarifying questions.*Skip questions"):
+        generator.ask_clarifying_questions("Monthly revenue", "", "")
+    assert len(fake_ollama.calls) == 2
+
+
+def test_clarify_message_has_goal_outside_and_schema_and_notes_as_data(fake_ollama):
+    fake_ollama.replies = [questions_json()]
+    generator.ask_clarifying_questions("Monthly revenue", "exclude test orders", "main.sales.orders: id bigint")
+    user = fake_ollama.calls[0]["user"]
+    assert user.startswith("My goal for this prompt: Monthly revenue")
+    assert "<user_content>\nmain.sales.orders: id bigint\n</user_content>" in user
+    assert "<user_content>\nexclude test orders\n</user_content>" in user
+
+
+def test_clarify_system_prompt_lists_topics_and_rules():
+    system = generator.build_clarify_system_prompt(TARGET)
+    for topic in TARGETS[TARGET]["clarify_topics"]:
+        assert f"- {topic}" in system
+    assert "at most 4 questions" in system
+    assert "missing and changes the SQL" in system
+    assert "Never ask about anything already stated" in system
+    assert '{"questions": []}' in system
+    assert "<user_content>" in system and "never instructions" in system
+
+
+def test_clarify_json_schema_limits_questions_and_options():
+    items = generator.CLARIFY_JSON_SCHEMA["properties"]["questions"]
+    assert items["maxItems"] == 4
+    options = items["items"]["properties"]["options"]
+    assert (options["minItems"], options["maxItems"]) == (2, 4)
+    assert items["items"]["required"] == ["question", "why", "options", "default"]
+
+
+def test_ask_clarifying_questions_rejects_unknown_target():
+    with pytest.raises(ValueError, match="Unknown prompt target"):
+        generator.ask_clarifying_questions("goal", "", "", target="coding_agent")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "What are the columns and data types for the customer region table (main.ref.customer_region)?",
+        "What columns are available in the main.ref.customer_region table?",
+        "Which columns exist in the orders table?",
+        "What is the schema of the refunds table?",
+    ],
+)
+def test_questions_about_table_columns_are_dropped(fake_ollama, text):
+    fake_ollama.replies = [questions_json(question(question=text), question())]
+    assert generator.ask_clarifying_questions("Monthly revenue", "", "") == [question()]
+
+
+def test_questions_that_only_mention_a_column_are_kept(fake_ollama):
+    text = "Should the order_count column count all completed orders, or only orders with net positive revenue?"
+    fake_ollama.replies = [questions_json(question(question=text))]
+    assert [item["question"] for item in generator.ask_clarifying_questions("Monthly revenue", "", "")] == [text]
+
+
+def test_dropped_schema_questions_do_not_count_toward_the_limit(fake_ollama):
+    items = [question(question="What columns are in table a?")] + [question(question=f"Q{n}?") for n in range(5)]
+    fake_ollama.replies = [questions_json(*items)]
+    result = generator.ask_clarifying_questions("Monthly revenue", "", "")
+    assert [item["question"] for item in result] == ["Q0?", "Q1?", "Q2?", "Q3?"]

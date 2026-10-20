@@ -305,6 +305,29 @@ def test_find_unverified_names_scans_every_field_and_lists_each_name_once():
     assert guardrails.find_unverified_names(prompt, "") == ["main.x.y"]
 
 
+def test_find_unverified_names_ignores_the_generic_naming_pattern():
+    prompt = make_prompt(final_prompt="Unity Catalog names are exactly catalog.schema.table; FROM schema.table is wrong")
+    assert guardrails.find_unverified_names(prompt, "") == []
+
+
+def test_find_unverified_names_accepts_parsed_schema_tables_as_verified():
+    prompt = make_prompt(final_prompt="FROM main.sales.orders JOIN main.ref.fx_rates f")
+    assert guardrails.find_unverified_names(prompt, "", ["main.sales.orders", "MAIN.REF.FX_RATES"]) == []
+    assert guardrails.find_unverified_names(prompt, "", ["main.sales.orders"]) == ["main.ref.fx_rates"]
+
+
+# --- check_goal ---
+
+
+@pytest.mark.parametrize("goal", ["", "   ", "\n\t"])
+def test_check_goal_requires_a_request(goal):
+    assert "What do you need?" in guardrails.check_goal(goal)
+
+
+def test_check_goal_accepts_a_request():
+    assert guardrails.check_goal("Monthly revenue by region") is None
+
+
 # --- find_injection_attempts ---
 
 

@@ -6,11 +6,13 @@ prompts, with guardrails that keep personal data away from the model.
 - One use case: Databricks data & analytics prompts (Databricks SQL by default, PySpark as an option).
 - Coding-agent and image-generation targets were removed; they are preserved in git tag `multi-target-v0`.
   Don't re-add them unless asked. TARGETS keeps its dict shape so targets can be added later.
-- Inputs: goal, pasted text, and txt / md / pdf / docx uploads. No images.
+- Inputs: the request (required), optional table schemas, and optional notes (pasted text or txt / md / pdf / docx
+  upload). No images. Two steps: clarifying questions, then generation ("Skip questions" generates directly).
 
 ## Structure
 - app.py — Streamlit UI only, no business logic
 - src/extractors.py — one function per input type, returns plain text
+- src/schema_input.py — parses pasted table schemas (DESCRIBE TABLE output / CREATE TABLE), best effort
 - src/guardrails.py — input, content and output checks
 - src/generator.py — prompt generation and LLM provider switch (ollama | groq | anthropic via LLM_PROVIDER env)
 - src/providers.py — PROVIDERS dict and calls for OpenAI-compatible APIs (e.g. Groq)

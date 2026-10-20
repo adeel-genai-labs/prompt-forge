@@ -9,45 +9,39 @@ system prompt; guardrails check the output has every required section.
 TARGETS: dict[str, dict] = {
     "data_analytics": {
         "label": "Data & analytics (SQL, Databricks)",
-        "guidance": (
-            "Write for an assistant that produces SQL or PySpark for analytics on Databricks. "
-            "Start from the business question in plain language and the decision it supports. "
-            "Never invent table or column names: use names exactly as the user supplied them. "
-            "Unity Catalog names are exactly catalog.schema.table (three parts). If no schema "
-            "is given, use clearly marked placeholders such as <catalog>.<schema>.<table_name> "
-            "and <revenue_column>, and add \"Schema not provided\" to assumptions, saying which "
-            "tables and columns are needed. List the key columns, state the grain (one row per "
-            "what) and how tables join. Define every metric and term unambiguously, e.g. what "
-            "counts as an 'active customer' or how revenue treats refunds and currency. "
-            "Business-definition choices the user didn't specify (gross vs net, refunds, "
-            "discounts, currency) must be listed in assumptions and marked \"confirm with "
-            "requester\"; don't present them as settled facts in the spec. Don't assume a "
-            "specific year or date range unless the user gives one; use a placeholder or a "
-            "relative range (e.g. \"last 12 complete months\") and list it as an assumption. "
-            "Write relative ranges as concrete Databricks SQL expressions, e.g. last 12 "
-            "complete months = >= add_months(date_trunc('MONTH', current_date()), -12) AND < "
-            "date_trunc('MONTH', current_date()). Any stated expected row count must match the "
-            "range exactly. State the time zone. Time filters use half-open ranges (>= start "
-            "AND < next_period_start); never use BETWEEN on timestamps. If the output needs one "
-            "row per period, generate the period series (e.g. sequence() + explode) and left "
-            "join the data to it, or explicitly state that periods with no data are omitted. "
-            "Say explicitly how to handle nulls and duplicates, e.g. exclude, COALESCE, or "
-            "deduplicate on a key with ROW_NUMBER. Duplicate checks group by the record's key "
-            "(use a placeholder like <transaction_id> if it's unknown), never by timestamp. "
-            "Default to Databricks SQL; use PySpark (DataFrame API) only when the user asks for "
-            "it. Make one decision per choice and don't offer alternatives inside the spec; "
-            "record each choice in assumptions. Queries are read-only by default: no "
-            "INSERT, UPDATE, DELETE or DDL unless the user explicitly asks, and when writes are "
-            "requested use MERGE so reruns are idempotent. Ask for readable, well-commented "
-            "queries using CTEs; select only the columns needed and avoid SELECT *; use LIMIT "
-            "while exploring; and call out performance concerns such as partition pruning and "
-            "large joins. Describe the expected output: columns, ordering, granularity and "
-            "format. Include validation queries, such as row counts, totals that reconcile with "
-            "a known figure, and null or duplicate checks. Validation queries must use the same "
-            "filters, units and currency as the result so the numbers reconcile. Reconciliation "
-            "checks must be independent of the result: re-aggregate from the source tables with "
-            "the same filters, or compare to a known reported figure. Never validate the result "
-            "against itself."
+        # A short checklist: small models follow bullets more reliably than one long paragraph.
+        "guidance": "\n".join(
+            [
+                "- Databricks SQL by default; PySpark only if asked.",
+                "- Start from the business question and the decision it supports.",
+                "- Never invent table or column names; use them exactly as supplied. With a schema, use only its "
+                "tables and columns (no placeholders for them).",
+                "- Unity Catalog names are exactly catalog.schema.table. No schema: placeholders like "
+                "<catalog>.<schema>.<table_name>, <revenue_column>, and \"Schema not provided\" (and what's needed) "
+                "in assumptions.",
+                "- State the grain (one row per what), keys and joins. Aggregate child tables (e.g. refunds) to the "
+                "join key before joining (no fan-out double counting).",
+                "- Define every metric. Unspecified business definitions (gross vs net, refunds, discounts, "
+                "currency) go in assumptions marked \"confirm with requester\", never stated as fact.",
+                "- Never assume a year or date range; use a placeholder or relative range as concrete SQL, e.g. last "
+                "12 complete months: >= add_months(date_trunc('MONTH', current_date()), -12) AND < "
+                "date_trunc('MONTH', current_date()).",
+                "- Time filters are half-open (>= start AND < next_period_start); never BETWEEN on timestamps. "
+                "State the time zone.",
+                "- One row per period: generate the series (sequence() + explode) and left join (row count is then "
+                "exact), or say empty periods are omitted. Stated row counts must match the range.",
+                "- Handle nulls and duplicates explicitly. Window functions always have PARTITION BY and ORDER BY, "
+                "e.g. ROW_NUMBER() OVER (PARTITION BY id ORDER BY ts DESC). Duplicate checks group by the record "
+                "key (<transaction_id> if unknown), never timestamp.",
+                "- Read-only by default (no DML/DDL); requested writes use idempotent MERGE.",
+                "- Use CTEs and comments; avoid SELECT *; LIMIT while exploring; note partition pruning, big joins.",
+                "- One decision per choice; no hedging (\"if X exists\", \"or alternatively\"). Use the schema and "
+                "answers; anything still unknown goes in assumptions.",
+                "- Describe the output: columns, ordering, grain, format.",
+                "- Validate: row counts, null/duplicate checks, reconciliation independent of the result "
+                "(re-aggregate from source with the same filters, units, currency, or a known reported figure); "
+                "never validate the result against itself.",
+            ]
         ),
         "required_sections": [
             "Business question",
@@ -58,12 +52,16 @@ TARGETS: dict[str, dict] = {
             "Expected output & validation",
         ],
         "clarify_topics": [
-            "Which tables or views hold the data, and what is the grain of each?",
-            "How are the key metrics defined (e.g. active user, revenue, churn)?",
-            "What time range and time zone, and are the end dates inclusive?",
-            "Databricks SQL or PySpark? Any Unity Catalog names to use?",
-            "Roughly how large are the tables, and how are they partitioned?",
-            "Is there a known figure the result should reconcile with?",
+            "Revenue definition: gross or net?",
+            "Refunds: included? Attributed to the refund date or the original sale date?",
+            "Currency: which one, and how to convert?",
+            "Time range",
+            "Grain (e.g. one row per day, month, region)",
+            "Time zone",
+            "Empty periods: show with zeros or omit?",
+            "Deduplication key",
+            "Exclusions: test, cancelled or internal orders?",
+            "Audience and output format",
         ],
     },
 }

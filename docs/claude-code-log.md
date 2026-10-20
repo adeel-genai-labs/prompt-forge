@@ -401,3 +401,66 @@
 
 **Next steps:**
 - Live goal-only run (e.g. "monthly revenue for the last 12 months") on Groq: check the add_months/date_trunc range, the 12-row count, the period series or "omitted" note, independent reconciliation, key-based duplicate checks and "confirm with requester" assumptions.
+
+## 2026-10-20 — Phase B: schema input + clarifying questions
+
+**Goal:** Reduce hedging caused by missing information: collect table schemas and ask up to 4 clarifying questions before generating; rewrite the guidance as a concise checklist with four new rules; label the result for Genie Code.
+
+**Files changed:**
+- Added src/schema_input.py: parse_schemas (DESCRIBE output with tabs, spaces or pipes, stopping at "#" sections; CREATE TABLE with nested types and constraints; several tables; never raises, {} when nothing parses) and format_schemas (one compact line per table)
+- src/schema.py: ClarifyingQuestion model (2–4 options; default falls back to the first option if it isn't one) and MAX_QUESTIONS = 4
+- src/generator.py: ask_clarifying_questions(goal, content, schema_text, target) with build_clarify_system_prompt, CLARIFY_JSON_SCHEMA (flat, for Ollama), parse_questions (one JSON retry; keeps the first 4; drops "what columns does table X have" questions via SCHEMA_QUESTION); generate_prompt gains answers and schema_text; build_user_message uses describe_inputs (schema and notes each wrapped as data) and describe_answers (confirmed = facts, defaults listed separately); add_unconfirmed_defaults appends "<question> <answer> (default, not confirmed)"; shared strip_fences
+- src/guardrails.py: check_goal (request is required); find_unverified_names takes verified_names (parsed schema tables) and ignores the generic names catalog.schema.table / schema.table / catalog.schema
+- src/targets.py: guidance rewritten as a 15-bullet checklist (2,148 chars) keeping every rule and adding: window functions need PARTITION BY and ORDER BY; aggregate child tables to the join key before joining; no hedging ("if X exists", "or alternatively"); exact row count with a generated period series; with a schema, use only its names. clarify_topics replaced with the 10 Phase B topics.
+- app.py: inputs "What do you need?" (required), "Table schemas (optional)" (with example placeholder and caption), "Notes or requirements (optional)" + upload; "Check my request" and "Skip questions" buttons; prepare_request (input guardrails; PII redaction of goal, notes and schema; parse schemas; unparseable schema sent as redacted text with a warning); render_questions (radios with the default preselected + optional "Other"; widget keys include a per-check id); finish_request (typed answers get the topic check and redaction; generate; output check; redaction; unverified names with schema tables as verified); run_safely for friendly errors; report shows schemas read and confirmed/default answer counts; result labelled "Ready to paste into Genie Code (or any data agent)" (also in the Markdown download)
+- CLAUDE.md: schema_input.py in Structure; Scope describes the new inputs and two steps
+- Tests: new tests/test_schema_input.py (18); test_generator (answers, schema blocks, clarifying questions, schema-question filter); test_guardrails (check_goal, verified_names, generic names); test_schema (ClarifyingQuestion); test_targets rewritten for the checklist (every old rule + Phase B rules + topics); test_app rewritten for the two-step flow (12)
+
+**Commands run:**
+- `.venv\Scripts\python.exe -m pytest -v`: 313 passed
+- Live Groq (gpt-oss-120b): vague goal → 4 good questions (gross/net, refund attribution, currency, empty months), 2.6 s. Detailed request + schema → good questions (empty months, missing FX rate, refund currency) but sometimes "what columns does customer_region have?" even after a prompt fix → code filter added. Step 2 with one confirmed and one default answer → check_output passed, default listed as "(default, not confirmed)", no placeholders for supplied tables, sequence() used.
+
+**Result:** Two-step flow works end to end with mocks and live on Groq.
+
+**Issues & fixes:**
+- parse_schemas attached a "Table:" header's name to a separate CREATE TABLE in the same block and lost that block's DESCRIBE columns → CREATE took precedence over DESCRIBE → parse DESCRIBE from the text outside CREATE statements; the header names a CREATE only when it's the block's only table.
+- Model asked which columns a table has, despite schemas/notes → prompt rules alone are unreliable at temperature 0.2 → stricter prompt wording plus a narrow SCHEMA_QUESTION filter (doesn't drop questions that just mention a column).
+- Live output echoed "catalog.schema.table" from the guidance, giving a false unverified-name warning → GENERIC_NAMES skipped.
+- "BETWEEN" in one live output was a numeric tolerance in the reconciliation check, not a timestamp filter → no change.
+- Bash heredocs again turned "\n" into a real newline (in targets.py) → fixed with the Edit tool.
+
+**Decisions:**
+- Guidance is 2,148 chars, not under 2,000: the two literal SQL examples (date range, ROW_NUMBER) take about 170 chars and were explicitly requested earlier. The test checks < 2,200.
+- The request is required in the UI (check_goal); generate_prompt still accepts content-only input at the API level, so earlier behaviour and tests hold.
+- An answer counts as confirmed when the user changed the default or typed "Other"; leaving the default (even if deliberate) counts as unconfirmed.
+- Unconfirmed defaults are added to assumptions in code, not by the model, so the "(default, not confirmed)" wording is always the same and never duplicated.
+- Answers are the user's own instructions (outside <user_content>); typed answers still get the blocked-topic check and PII redaction.
+- The schema field is not whitespace-normalised (tabs separate DESCRIBE columns). Parsed schemas go to the model as a compact block; unparseable text goes as redacted plain text with a UI warning.
+- Skip and "no questions" both call generate_prompt with answers=[]; equivalent to None.
+- Clarifying-question failures show a friendly error that points to "Skip questions".
+
+**Next steps:**
+- Manual UI run: vague goal → answer questions → generate; detailed_request.txt with schemas pasted.
+- Consider adding a schema sample file to samples/ (DESCRIBE output for the detailed_request tables).
+
+## 2026-10-20 — "Reviewed answers" checkbox
+
+**Goal:** Let the user confirm all answers at once, including those left on the default.
+
+**Files changed:**
+- app.py: REVIEWED_LABEL; render_questions adds a checkbox "I've reviewed these answers — treat them as confirmed" (unchecked by default, key reviewed_<form id>) under the questions; to_answer takes `reviewed`, and when it's ticked every answer is confirmed
+- tests/test_app.py: checkbox shown and unchecked; unchecked → defaults stay unconfirmed (report "0 confirmed, 3 left on default"); checked → all answers confirmed, including defaults (report "3 confirmed, 0 left on default")
+
+**Commands run:**
+- `.venv\Scripts\python.exe -m pytest -v`: 316 passed
+
+**Result:** Works as specified; with the box ticked, no "(default, not confirmed)" assumptions are added, because the generator only adds them for unconfirmed answers.
+
+**Issues & fixes:** None.
+
+**Decisions:**
+- No generator change: confirmation is decided in the UI, and generate_prompt already states confirmed answers as facts.
+- The checkbox sits inside the questions form, so ticking it doesn't rerun the page; it applies when "Generate prompt" is pressed.
+
+**Next steps:**
+- Manual UI run of the two-step flow with and without the checkbox.

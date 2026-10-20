@@ -6,6 +6,7 @@ that the UI can show to the user as-is.
 
 import re
 from collections import Counter
+from collections.abc import Iterable
 
 import pymupdf
 
@@ -75,6 +76,8 @@ TWO_PART_NAME_AFTER_KEYWORD = re.compile(
 )
 # Web domains (e.g. docs.databricks.com) have the same shape as table names.
 DOMAIN_ENDINGS = {"com", "org", "net", "io", "ai", "dev", "co", "uk"}
+# The naming pattern itself; models echo it from the guidance ("names are exactly catalog.schema.table").
+GENERIC_NAMES = {"catalog.schema.table", "schema.table", "catalog.schema"}
 
 SECRET_PATTERNS = {
     "API key": re.compile(r"\bsk-[A-Za-z0-9_-]{20,}"),
@@ -199,20 +202,23 @@ def redact_prompt(prompt: GeneratedPrompt) -> tuple[GeneratedPrompt, dict[str, i
     return redacted_prompt, dict(totals)
 
 
-def find_unverified_names(prompt: GeneratedPrompt, input_text: str) -> list[str]:
+def find_unverified_names(
+    prompt: GeneratedPrompt, input_text: str, verified_names: Iterable[str] = ()
+) -> list[str]:
     """Return dotted table names in the generated prompt that don't appear in the user's input.
 
+    verified_names (e.g. tables parsed from the user's schemas) also count as known.
     Used to warn the user, not to block. Placeholders in <angle brackets> are ignored,
     as are web domains. Matching ignores case and backticks.
     """
     output_text = "\n".join([prompt.title, *prompt.sections.values(), *prompt.assumptions, prompt.final_prompt])
     output_text = output_text.replace("`", "")
-    input_text = input_text.replace("`", "")
+    input_text = "\n".join([input_text, *verified_names]).replace("`", "")
 
     names = THREE_PART_NAME.findall(output_text) + TWO_PART_NAME_AFTER_KEYWORD.findall(output_text)
     unverified = []
     for name in names:
-        if name.rsplit(".", 1)[-1].lower() in DOMAIN_ENDINGS:
+        if name.rsplit(".", 1)[-1].lower() in DOMAIN_ENDINGS or name.lower() in GENERIC_NAMES:
             continue
         in_input = re.search(rf"(?<![\w.]){re.escape(name)}(?![\w])", input_text, flags=re.IGNORECASE)
         if not in_input and name.lower() not in (seen.lower() for seen in unverified):
@@ -266,6 +272,13 @@ def check_has_input(goal: str, content: str) -> str | None:
     """Require at least one of a goal or some content (pasted text or file text)."""
     if not goal.strip() and not content.strip():
         return "Please describe what the prompt is for, paste some text, or upload a file."
+    return None
+
+
+def check_goal(goal: str) -> str | None:
+    """Require the request ("What do you need?"); the app can't ask useful questions without it."""
+    if not goal.strip():
+        return 'Please describe what you need in "What do you need?", e.g. "Monthly revenue by region".'
     return None
 
 

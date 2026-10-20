@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from src.schema import GeneratedPrompt
+from src.schema import MAX_QUESTIONS, ClarifyingQuestion, GeneratedPrompt
 
 
 def valid_fields() -> dict:
@@ -57,3 +57,36 @@ def test_missing_required_field_is_rejected(missing):
 def test_wrong_field_type_is_rejected(field, bad_value):
     with pytest.raises(ValidationError):
         GeneratedPrompt(**{**valid_fields(), field: bad_value})
+
+
+# --- ClarifyingQuestion ---
+
+
+def valid_question() -> dict:
+    return {"question": "Revenue: gross or net?", "why": "Changes the metric.", "options": ["Gross", "Net"], "default": "Net"}
+
+
+def test_clarifying_question_accepts_valid_data():
+    assert ClarifyingQuestion(**valid_question()).model_dump() == valid_question()
+
+
+@pytest.mark.parametrize("options", [["Only one"], ["a", "b", "c", "d", "e"], []])
+def test_clarifying_question_needs_two_to_four_options(options):
+    with pytest.raises(ValidationError):
+        ClarifyingQuestion(**{**valid_question(), "options": options})
+
+
+@pytest.mark.parametrize("missing", ["question", "why", "options", "default"])
+def test_clarifying_question_requires_every_field(missing):
+    data = valid_question()
+    del data[missing]
+    with pytest.raises(ValidationError):
+        ClarifyingQuestion(**data)
+
+
+def test_clarifying_question_default_falls_back_to_first_option():
+    assert ClarifyingQuestion(**{**valid_question(), "default": "Net revenue"}).default == "Gross"
+
+
+def test_max_questions_is_four():
+    assert MAX_QUESTIONS == 4
