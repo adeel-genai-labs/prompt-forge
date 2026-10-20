@@ -5,10 +5,10 @@ that the UI can show to the user as-is.
 """
 
 import re
+from pathlib import Path
 
 import pymupdf
 
-from src.extractors import file_extension
 from src.schema import GeneratedPrompt
 from src.targets import TARGETS
 
@@ -102,7 +102,8 @@ _VERHOEFF_P = [
 
 def check_file(file_name: str, data: bytes) -> str | None:
     """Reject unsupported types, empty files, files over MAX_FILE_BYTES and images over MAX_IMAGE_BYTES."""
-    extension = file_extension(file_name)
+    # Not imported from extractors: extractors -> generator -> guardrails would be a circular import.
+    extension = Path(file_name).suffix.lower().lstrip(".")
     if extension not in ALLOWED_EXTENSIONS:
         allowed = ", ".join(sorted(ALLOWED_EXTENSIONS))
         return f"Sorry, '{file_name}' isn't a supported file type. Please upload one of: {allowed}."
@@ -196,7 +197,8 @@ def wrap_as_data(text: str) -> str:
 
 def check_output(prompt: GeneratedPrompt) -> str | None:
     """Reject a generated prompt that has an unknown target, a missing or empty required section
-    for that target (from TARGETS), an empty final_prompt, or text that looks like a leaked secret."""
+    for that target (from TARGETS), an empty final_prompt, an image prompt without a negative_prompt,
+    or text that looks like a leaked secret."""
     if prompt.target not in TARGETS:
         return f"Unknown prompt target '{prompt.target}'. Please choose a target from the list and try again."
 
@@ -210,6 +212,8 @@ def check_output(prompt: GeneratedPrompt) -> str | None:
         return f"The generated prompt is missing: {', '.join(missing)}. Please try generating it again."
     if not prompt.final_prompt.strip():
         return "The generated prompt came back empty. Please try generating it again."
+    if prompt.target == "image_generation" and not prompt.negative_prompt.strip():
+        return "The image prompt is missing its negative prompt (what to avoid). Please try generating it again."
 
     all_text = "\n".join(
         [prompt.title, *prompt.sections.values(), *prompt.assumptions, prompt.final_prompt, prompt.negative_prompt]

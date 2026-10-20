@@ -165,3 +165,37 @@
 
 **Next steps:**
 - Implement generator.py: get_provider, build_system_prompt(target), parse_response, call_ollama, call_anthropic, describe_image, generate_prompt, with mocked-client tests.
+
+## 2026-10-20 — Implement generator + negative_prompt check
+
+**Goal:** Require a negative_prompt for image prompts in check_output; implement src/generator.py (v2 functions stay as stubs).
+
+**Files changed:**
+- src/guardrails.py: check_output rejects image_generation prompts with an empty negative_prompt; `check_file` now gets the file extension with `Path` itself instead of importing `extractors.file_extension` (see issues)
+- src/generator.py: implemented get_provider, generate_prompt (one retry), describe_image, build_system_prompt, parse_response, call_ollama, call_anthropic; added helpers `build_user_message` and `call_model`, plus constants TEMPERATURE=0.2, ANTHROPIC_MAX_TOKENS=4096, JSON_REMINDER, IMAGE_SYSTEM_PROMPT and IMAGE_USER_PROMPT
+- .env.example: added OLLAMA_TEXT_MODEL, OLLAMA_VISION_MODEL, ANTHROPIC_MODEL
+- tests/test_generator.py: new (31 cases, all mocked, no network)
+- tests/test_guardrails.py: make_prompt gives image prompts a negative_prompt; 3 new cases
+
+**Commands run:**
+- Import smoke test of app and src modules: OK
+- `.venv\Scripts\python.exe -m pytest -v`: first run 1 failed, 155 passed; after fix 156 passed
+
+**Result:** All src modules are implemented except the v2 stubs. app.py is still a stub. Not yet tried against a live Ollama or the Anthropic API.
+
+**Issues & fixes:**
+- Circular import (guardrails → extractors → generator → guardrails) → generator now needs `wrap_as_data` from guardrails → guardrails computes the file extension with `Path` instead of importing from extractors.
+- An unknown LLM_PROVIDER was reported as "didn't return a usable prompt" → `generate_prompt`'s `except ValueError` wrapped `call_model`, so get_provider's ValueError was swallowed and retried → only `parse_response` sits inside the try blocks now. Found by test_unknown_provider_gives_friendly_error.
+
+**Decisions:**
+- Error types: ValueError for bad settings or unusable model output, RuntimeError when the provider can't be reached or rejects the request. app.py will catch both and show the message.
+- `call_model` routes to call_ollama or call_anthropic, so generate_prompt and describe_image don't repeat the provider switch.
+- The system prompt includes an example JSON shape with the target's exact section keys; negative_prompt is required for image_generation and set to "" for other targets.
+- The goal goes in the user message as the user's own instruction, before the `<user_content>` block, and is never wrapped as data.
+- A missing ANTHROPIC_API_KEY, or the placeholder "your-key-here", is caught before any network call.
+- Ollama `format="json"` is not used yet, to keep the agreed signatures. It would make small local models much more reliable at returning JSON (candidate for later).
+- Local .env was not changed (it may hold the user's key); the new model variables have code defaults, so it still works.
+
+**Next steps:**
+- Implement app.py: the Streamlit flow wiring guardrails, extractors and generator, with friendly errors.
+- Run a live check with Ollama (`ollama pull llama3.2` and `ollama pull llama3.2-vision`) and with Anthropic.

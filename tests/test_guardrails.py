@@ -20,6 +20,8 @@ def make_prompt(target: str = "coding_agent", **changes) -> GeneratedPrompt:
     """Return a valid GeneratedPrompt for target, with optional field overrides."""
     sections = {name: f"Text for {name}." for name in TARGETS[target]["required_sections"]}
     fields = {"target": target, "title": "Sample", "sections": sections, "final_prompt": "Do the task."}
+    if target == "image_generation":
+        fields["negative_prompt"] = "blurry, watermark, extra fingers"
     return GeneratedPrompt(**{**fields, **changes})
 
 
@@ -250,6 +252,16 @@ def test_check_output_rejects_missing_and_empty_sections():
     del prompt.sections["Tasks"]
     prompt.sections["Constraints"] = "   "
     assert "missing: Tasks, Constraints" in guardrails.check_output(prompt)
+
+
+@pytest.mark.parametrize("negative_prompt", ["", "   "])
+def test_check_output_requires_negative_prompt_for_images(negative_prompt):
+    prompt = make_prompt("image_generation", negative_prompt=negative_prompt)
+    assert "missing its negative prompt" in guardrails.check_output(prompt)
+
+
+def test_check_output_does_not_require_negative_prompt_for_other_targets():
+    assert guardrails.check_output(make_prompt("coding_agent", negative_prompt="")) is None
 
 
 def test_check_output_rejects_empty_final_prompt():
