@@ -464,3 +464,53 @@
 
 **Next steps:**
 - Manual UI run of the two-step flow with and without the checkbox.
+
+## 2026-10-20 — README accuracy check + MIT LICENSE
+
+**Goal:** Check the user's new README draft against the code and fix only what's inaccurate; add an MIT LICENSE.
+
+**Files changed:**
+- README.md (5 small edits, structure and tone unchanged):
+  - Mermaid "strict output schema" → "validated JSON output" (a strict schema is only enforced on Ollama)
+  - "never invented" → the model is told never to invent names, and unknown names are flagged (it's an instruction plus a warning, not a guarantee)
+  - "Strict JSON output with automatic retry…" → schema-enforced on Ollama, JSON mode on Groq, validated on every reply, retry on invalid or incomplete replies
+  - extractors.py line: added .txt/.md uploads
+  - schema.py line: models for the generated prompt and clarifying questions
+- Added LICENSE (MIT, "Copyright (c) 2026 Adeel Ahmad")
+
+**Commands run:**
+- `.venv\Scripts\python.exe -m pytest -q`: 316 passed (matches the README)
+- Compared README with .env.example, requirements.txt, src/ and tests/ listings, guardrails limits, MAX_QUESTIONS
+
+**Result:** README matches the code. Verified as correct and left unchanged: setup and activation commands (Command Prompt and macOS/Linux), `copy`/`cp .env.example .env`, the configuration table (all six settings and defaults), `ollama pull llama3.2`, default port 8501, project structure file names, test count 316, the PII list (incl. Luhn/Verhoeff and date protection), "up to four" questions, providers, and known limitations.
+
+**Issues & fixes:** None.
+
+**Decisions:**
+- Upload types (txt, md, pdf, docx) and limits (10 MB per file, 30 PDF pages, 50,000 characters of text, 500-character request) aren't in the draft; not added, since the brief was to change only what's wrong. Offered to the user.
+- Left placeholders as the user wrote them: docs/demo.gif (doesn't exist yet), LinkedIn URL, and the before/after comment.
+- Left the clone URL (github.com/adeel-genai-labs/prompt-forge) unchanged; I can't check it without git/network access to the repo.
+
+**Next steps:**
+- User: add the demo GIF and the LinkedIn URL.
+
+## 2026-10-20 — README: upload types and limits
+
+**Goal:** Add one line listing upload types and input limits.
+
+**Files changed:**
+- README.md: new Guardrails bullet under Features: "Input limits: uploads in txt, md, pdf or docx, up to 10 MB per file and 30 PDF pages; up to 50,000 characters of text per field and a 500-character request."
+
+**Commands run:** None (values checked earlier against ALLOWED_EXTENSIONS, MAX_FILE_BYTES, MAX_PDF_PAGES, MAX_TEXT_CHARS, MAX_GOAL_CHARS in src/guardrails.py).
+
+**Result:** Done.
+
+**Issues & fixes:** None.
+
+**Decisions:**
+- Placed under Features → Guardrails, since the limits are enforced by guardrails.
+- "per field": MAX_TEXT_CHARS applies separately to the notes (pasted text plus file text) and to the schema field, not to their total.
+- The user confirmed the clone URL is correct.
+
+**Next steps:**
+- User: add the demo GIF and the LinkedIn URL.
