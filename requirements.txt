@@ -1,5 +1,5 @@
 streamlit
-pymupdf
+pymupdf<2
 python-docx
 pydantic
 python-dotenv

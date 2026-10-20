@@ -4,11 +4,11 @@ from pydantic import BaseModel, Field
 
 
 class GeneratedPrompt(BaseModel):
-    """A structured LLM prompt built from the user's input."""
+    """A structured LLM prompt built from the user's input for one target."""
 
-    role: str = Field(description="Who the model should act as.")
-    task: str = Field(description="What the model must do.")
-    context: str = Field(description="Background the model needs.")
-    constraints: list[str] = Field(default_factory=list, description="Rules the answer must follow.")
-    output_format: str = Field(description="Shape of the expected answer.")
+    target: str = Field(description="Key in TARGETS, e.g. 'coding_agent'.")
+    title: str = Field(description="Short name for the prompt.")
+    sections: dict[str, str] = Field(description="Section name -> text, following the target's required_sections.")
+    assumptions: list[str] = Field(default_factory=list, description="Gaps the model filled in, stated openly.")
     final_prompt: str = Field(description="The full prompt, ready to paste.")
+    negative_prompt: str = Field(default="", description="What to avoid; used by image_generation only.")
