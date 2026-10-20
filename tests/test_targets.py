@@ -51,6 +51,22 @@ def test_target_has_all_fields_filled_in(key):
         "don't offer alternatives",
         "record each choice in assumptions",
         "same filters, units and currency",
+        # Rules added after output review #2 (goal-only run)
+        "concrete Databricks SQL expressions",
+        ">= add_months(date_trunc('MONTH', current_date()), -12) AND < date_trunc('MONTH', current_date())",
+        "expected row count must match the range exactly",
+        "generate the period series (e.g. sequence() + explode) and left join",
+        "periods with no data are omitted",
+        "Reconciliation checks must be independent of the result",
+        "re-aggregate from the source tables with the same filters",
+        "compare to a known reported figure",
+        "Never validate the result against itself",
+        "Duplicate checks group by the record's key",
+        "<transaction_id>",
+        "never by timestamp",
+        "gross vs net, refunds, discounts, currency",
+        '"confirm with requester"',
+        "don't present them as settled facts",
     ],
 )
 def test_data_analytics_guidance_covers_key_practices(phrase):

@@ -373,3 +373,31 @@
 
 **Next steps:**
 - Live UI run with detailed_request.txt (names supplied, so no warnings expected), pii_sample.txt and injection_sample.txt.
+
+## 2026-10-20 — Guidance tightening from output review #2 (goal-only run)
+
+**Goal:** Add five data_analytics guidance rules found in a goal-only live run: concrete relative-date SQL, a period series for one-row-per-period output, independent reconciliation, key-based duplicate checks, and "confirm with requester" for unspecified business definitions.
+
+**Files changed:**
+- src/targets.py: data_analytics guidance now says:
+  - relative ranges are written as concrete Databricks SQL (example for last 12 complete months with add_months/date_trunc/current_date), and any stated expected row count must match the range exactly
+  - one row per period means generating the period series (sequence() + explode) and left joining, or stating that empty periods are omitted
+  - reconciliation re-aggregates from the source with the same filters or compares to a known reported figure, and never validates the result against itself
+  - duplicate checks group by the record's key (<transaction_id> placeholder if unknown), never by timestamp
+  - unspecified business definitions (gross vs net, refunds, discounts, currency) go in assumptions marked "confirm with requester", not stated as settled facts
+- tests/test_targets.py: 15 new phrase checks
+
+**Commands run:**
+- `.venv\Scripts\python.exe -m pytest -v`: 229 passed
+
+**Result:** Guidance covers all five rules. Not yet re-checked with a live goal-only run.
+
+**Issues & fixes:** None.
+
+**Decisions:**
+- The "confirm with requester" rule sits next to "Define every metric…", so it's clear the model should still pick one definition (one decision per choice) but flag it, not leave it open or state it as fact.
+- The duplicate-key rule sits with null/duplicate handling, and the independence rule after the existing "same filters, units and currency" rule, so related rules read together.
+- Guidance is now about 3,000 characters (2,973). Fine for current models, but if it keeps growing, splitting it into a short bulleted list in the system prompt would make it easier for small local models (llama3.2) to follow.
+
+**Next steps:**
+- Live goal-only run (e.g. "monthly revenue for the last 12 months") on Groq: check the add_months/date_trunc range, the 12-row count, the period series or "omitted" note, independent reconciliation, key-based duplicate checks and "confirm with requester" assumptions.
