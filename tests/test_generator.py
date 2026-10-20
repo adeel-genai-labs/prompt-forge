@@ -93,7 +93,7 @@ def test_model_for_uses_defaults(monkeypatch):
         monkeypatch.delenv(name, raising=False)
     assert generator.model_for("ollama") == "llama3.2"
     assert generator.model_for("anthropic") == "claude-sonnet-5-5"
-    assert generator.model_for("groq") == "llama-3.3-70b-versatile"
+    assert generator.model_for("groq") == "openai/gpt-oss-120b"
 
 
 def test_model_for_reads_env_at_call_time(monkeypatch):

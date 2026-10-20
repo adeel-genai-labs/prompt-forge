@@ -308,3 +308,35 @@
 **Next steps:**
 - Live test with Groq (GROQ_API_KEY in .env, LLM_PROVIDER=groq) using vague_request.txt, detailed_request.txt and goal-only input.
 - Re-test with Ollama llama3.2 on the strict schema.
+
+## 2026-10-20 — Groq default model: llama-3.3-70b-versatile → openai/gpt-oss-120b
+
+**Goal:** Replace the retired Groq model (llama-3.3-70b-versatile, retired 2026-08-16) with openai/gpt-oss-120b, and confirm our JSON-mode request works with this reasoning model.
+
+**Files changed:**
+- src/providers.py: groq `text_model` → `openai/gpt-oss-120b`, with a comment on the retirement and on where gpt-oss puts its reasoning
+- .env.example: `GROQ_TEXT_MODEL=openai/gpt-oss-120b`
+- tests/test_providers.py, tests/test_generator.py, tests/test_app.py: expected model name updated
+
+**Commands run:**
+- Listed the account's Groq models (at the user's request): llama-3.3-70b-versatile is not available; general text models are openai/gpt-oss-120b, openai/gpt-oss-20b, qwen/qwen3.8-27b
+- Read Groq docs (structured-outputs, reasoning)
+- One-off scratchpad probe (not in repo) with our request shape (temperature 0.2, `response_format={"type": "json_object"}`): default settings gave valid JSON in `content` in 2.1 s (reasoning in a separate `reasoning` field); `reasoning_effort="low"` also gave valid JSON, in 0.8 s
+- Live `generate_prompt` via Groq on samples/vague_request.txt: 1 call (no retries), all 6 required sections, 7 assumptions, 5.1 s
+- `.venv\Scripts\python.exe -m pytest -v`: 175 passed
+
+**Result:** Groq works with the new default; no request changes needed.
+
+**Issues & fixes:**
+- The probe script failed with KeyError GROQ_API_KEY → `load_dotenv()` looks for .env next to the script (scratchpad), not the project → `load_dotenv(".env")` with the project as the working directory.
+- The docs summary suggested JSON mode can't be used with reasoning on gpt-oss → that was the summariser's inference from a `reasoning_format` note that applies to other models → live tests show JSON mode works and `content` holds only the JSON.
+
+**Decisions:**
+- Kept `response_format={"type": "json_object"}`: Groq supports it on all models, and gpt-oss keeps reasoning out of `content`.
+- Did not set `reasoning_effort` or `include_reasoning`: other OpenAI-compatible models may reject them, and default effort gave complete prompts on the first try. If speed matters, a per-provider `reasoning_effort: "low"` is the next step (about 2.5× faster in the probe).
+- Groq's docs also list gpt-oss-120b for strict `json_schema` mode. Not adopted: strict mode needs every field required and `additionalProperties: false` at every level, which would mean changing build_json_schema; JSON mode plus check_output and the retry already covers us.
+- Temperature stays 0.2 (Groq suggests 0.5–0.7 for reasoning tasks, but we want stable structure; the live run was fine).
+- Earlier log entries that mention the old model were left as written, per the log rules.
+
+**Next steps:**
+- Full UI test with LLM_PROVIDER=groq on detailed_request.txt, pii_sample.txt and injection_sample.txt.

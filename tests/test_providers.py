@@ -41,7 +41,7 @@ def test_groq_entry_has_expected_settings():
     groq = providers.PROVIDERS["groq"]
     assert groq["base_url"] == "https://api.groq.com/openai/v1"
     assert groq["api_key_env"] == "GROQ_API_KEY"
-    assert groq["text_model"] == "llama-3.3-70b-versatile"
+    assert groq["text_model"] == "openai/gpt-oss-120b"
     assert groq["model_env"] == "GROQ_TEXT_MODEL"
 
 
@@ -51,7 +51,7 @@ def test_call_openai_compatible_uses_json_mode_base_url_and_key(fake_openai):
     assert reply == '{"title": "x"}'
     assert fake_openai.client_kwargs["base_url"] == "https://api.groq.com/openai/v1"
     assert fake_openai.client_kwargs["api_key"] == "test-key"
-    assert fake_openai.sent["model"] == "llama-3.3-70b-versatile"
+    assert fake_openai.sent["model"] == "openai/gpt-oss-120b"
     assert fake_openai.sent["response_format"] == {"type": "json_object"}
     assert fake_openai.sent["temperature"] == 0.2
     assert fake_openai.sent["messages"] == [
@@ -81,7 +81,7 @@ def test_missing_or_placeholder_key_names_the_env_var(monkeypatch, key):
     [
         (openai.RateLimitError, 429, "Rate limit reached, please wait a minute and try again."),
         (openai.AuthenticationError, 401, "Groq rejected the API key. Please check GROQ_API_KEY."),
-        (openai.NotFoundError, 404, "Groq doesn't recognise the model 'llama-3.3-70b-versatile'"),
+        (openai.NotFoundError, 404, "Groq doesn't recognise the model 'openai/gpt-oss-120b'"),
         (openai.InternalServerError, 500, r"Groq returned an error \(500\)"),
     ],
 )

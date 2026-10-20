@@ -12,7 +12,9 @@ PROVIDERS: dict[str, dict] = {
         "label": "Groq",
         "base_url": "https://api.groq.com/openai/v1",
         "api_key_env": "GROQ_API_KEY",
-        "text_model": "llama-3.3-70b-versatile",
+        # Replaces llama-3.3-70b-versatile (retired by Groq on 2026-08-16). gpt-oss is a reasoning model,
+        # but Groq returns its reasoning in a separate field, so JSON-mode content stays plain JSON.
+        "text_model": "openai/gpt-oss-120b",
         "model_env": "GROQ_TEXT_MODEL",
     },
 }

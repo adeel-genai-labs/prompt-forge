@@ -53,7 +53,7 @@ def test_app_shows_databricks_branding_and_no_target_picker(generate_calls):
     assert "without leaking personal data" in at.caption[0].value
     assert len(at.selectbox) == 0
     sidebar_text = " ".join(item.value for item in at.sidebar.markdown)
-    assert "groq" in sidebar_text and "llama-3.3-70b-versatile" in sidebar_text
+    assert "groq" in sidebar_text and "openai/gpt-oss-120b" in sidebar_text
 
 
 def test_app_generates_prompt_from_pasted_text(generate_calls):
