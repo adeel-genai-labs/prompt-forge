@@ -173,6 +173,44 @@ def test_redact_pii_leaves_ordinary_numbers_alone(text):
     assert guardrails.redact_pii(text) == (text, {})
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "2023-01-01",
+        "2023-01-01 00:00:00",
+        "2023-12-31 23:59:59",
+        "2025-01-01T00:00:00Z",
+        "2025-01-01T00:00:00.123+05:30",
+        "2025-01-01 00:00:00+0530",
+        "23:59:59",
+        "09:30",
+        "WHERE order_ts >= '2025-01-01 00:00:00' AND order_ts < '2026-01-01 00:00:00'",
+        "between 2024-01-01 and 2024-12-31 23:59:59",
+    ],
+)
+def test_redact_pii_never_redacts_dates_datetimes_or_times(text):
+    assert guardrails.redact_pii(text) == (text, {})
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("Call +1 555-010-0199 at 10:30", "Call [PHONE] at 10:30"),
+        ("Phone (555) 010-0142, updated 2026-10-02 14:30:00", "Phone [PHONE], updated 2026-10-02 14:30:00"),
+        ("2023-01-01 00:00:00 call from +44 20 7946 0958", "2023-01-01 00:00:00 call from [PHONE]"),
+    ],
+)
+def test_redact_pii_still_redacts_phones_next_to_dates(text, expected):
+    assert guardrails.redact_pii(text) == (expected, {"PHONE": 1})
+
+
+def test_overlaps_any():
+    assert guardrails.overlaps_any((5, 10), [(0, 6)])
+    assert guardrails.overlaps_any((5, 10), [(9, 20)])
+    assert not guardrails.overlaps_any((5, 10), [(0, 5), (10, 12)])
+    assert not guardrails.overlaps_any((5, 10), [])
+
+
 def test_luhn_and_verhoeff_checksums():
     assert guardrails.luhn_valid("4111 1111 1111 1111")
     assert not guardrails.luhn_valid("4111 1111 1111 1112")
@@ -221,6 +259,50 @@ def test_check_has_input_accepts_goal_or_content(goal, content):
 
 def test_check_has_input_rejects_neither():
     assert "describe what the prompt is for" in guardrails.check_has_input("  ", "\n\t")
+
+
+# --- find_unverified_names ---
+
+
+def test_find_unverified_names_flags_names_not_in_input():
+    prompt = make_prompt(final_prompt="SELECT region FROM main.sales.orders JOIN main.ref.fx_rates_daily f ON ...")
+    assert guardrails.find_unverified_names(prompt, "Orders live in main.sales.orders") == ["main.ref.fx_rates_daily"]
+
+
+def test_find_unverified_names_returns_empty_when_all_names_came_from_input():
+    prompt = make_prompt(final_prompt="Use main.sales.orders and main.sales.refunds.")
+    assert guardrails.find_unverified_names(prompt, "tables: main.sales.orders, main.sales.refunds") == []
+
+
+def test_find_unverified_names_ignores_case_and_backticks():
+    prompt = make_prompt(final_prompt="FROM `main`.`sales`.`orders`")
+    assert guardrails.find_unverified_names(prompt, "orders are in MAIN.SALES.ORDERS") == []
+
+
+def test_find_unverified_names_ignores_placeholders():
+    prompt = make_prompt(final_prompt="FROM <catalog>.<schema>.<table_name> WHERE <revenue_column> > 0")
+    assert guardrails.find_unverified_names(prompt, "need a sales report") == []
+
+
+def test_find_unverified_names_checks_two_part_names_only_after_sql_keywords():
+    prompt = make_prompt(final_prompt="SELECT o.order_id, r.amount FROM sales.orders o JOIN sales.refunds r ON o.order_id = r.order_id")
+    assert guardrails.find_unverified_names(prompt, "orders: sales.orders") == ["sales.refunds"]
+
+
+def test_find_unverified_names_ignores_alias_column_comparisons_and_domains():
+    prompt = make_prompt(final_prompt="join o.order_id = r.order_id; docs at docs.databricks.com")
+    assert guardrails.find_unverified_names(prompt, "") == []
+
+
+def test_find_unverified_names_uses_table_part_of_column_references():
+    prompt = make_prompt(assumptions=["main.sales.orders.order_id is unique", "main.crm.customers.id is unique"])
+    assert guardrails.find_unverified_names(prompt, "main.sales.orders") == ["main.crm.customers"]
+
+
+def test_find_unverified_names_scans_every_field_and_lists_each_name_once():
+    prompt = make_prompt(title="Revenue from main.x.y", final_prompt="Use MAIN.X.Y and main.x.y")
+    prompt.sections["Data sources"] = "main.x.y"
+    assert guardrails.find_unverified_names(prompt, "") == ["main.x.y"]
 
 
 # --- find_injection_attempts ---

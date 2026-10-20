@@ -340,3 +340,36 @@
 
 **Next steps:**
 - Full UI test with LLM_PROVIDER=groq on detailed_request.txt, pii_sample.txt and injection_sample.txt.
+
+## 2026-10-20 — Fixes from the first live Groq review
+
+**Goal:** (1) Stop ISO timestamps being redacted as [PHONE]. (2) Add stricter data_analytics guidance (no invented names, placeholders, no assumed dates, half-open ranges, one decision per choice, validation queries that reconcile). (3) Warn about table names in the output that weren't in the input.
+
+**Files changed:**
+- src/guardrails.py: DATETIME_PATTERN (ISO dates, datetimes with T or space, fractions and Z/offsets, plain times); redact_pii skips any PII match that overlaps a date/time; new helper `overlaps_any`; new `find_unverified_names(prompt, input_text)` with THREE_PART_NAME, TWO_PART_NAME_AFTER_KEYWORD and DOMAIN_ENDINGS
+- src/targets.py: data_analytics guidance rewritten to add the new rules; replaced the conflicting "explicit dates / whether boundaries are inclusive" and "mention PySpark as the alternative" lines
+- app.py: run_pipeline adds `unverified_names` to the report; render_report shows "These table names weren't in your input. Verify them before use: ..." as a warning (doesn't block); main() docstring updated
+- tests/test_guardrails.py: 10 date/time cases, 3 phone-next-to-date cases, overlaps_any, 8 find_unverified_names tests
+- tests/test_targets.py: 14 phrase checks for the new rules, plus a check that the conflicting old wording is gone
+- tests/test_app.py: warning shown for an invented table name (result still shown); no warning for placeholders
+
+**Commands run:**
+- Reproduced the bug: the PHONE pattern matched "2023-01-01 00" (date + hour = 10 digits) in "2023-01-01 00:00:00"
+- `.venv\Scripts\python.exe -m pytest -v`: 214 passed
+- Live Groq run on samples/vague_request.txt: placeholders used (<catalog>.<schema>.<sales_table>, <revenue_column>, ...), missing schema listed in assumptions, no BETWEEN, no unverified names, no redactions
+
+**Result:** Timestamps survive redaction; the guidance steers the model to placeholders instead of invented names; invented names are flagged in the UI.
+
+**Issues & fixes:**
+- Timestamps redacted as [PHONE] → the phone pattern allows space-separated digit groups, and date + hour reaches the 10-digit minimum → skip PII matches that overlap an ISO date/time span (applies to every PII pattern: dates and times are never PII here).
+- First version of find_unverified_names flagged `o.order_id` in "join o.order_id = r.order_id" → two-part names after JOIN can be alias.column in prose → don't count a two-part name when a comparison operator follows it.
+
+**Decisions:**
+- Date/time protection uses spans and overlap rather than a stricter phone regex, so phone formats stay unchanged and the rule ("dates and times are never PII") is easy to read.
+- Two-part names only count after FROM/JOIN/INTO/TABLE/UPDATE/USING; three-part names count anywhere. In `catalog.schema.table.column` only the first three parts are checked.
+- Names are matched case-insensitively with backticks removed; each name is reported once; web domains (.com, .org, .io, ...) are skipped.
+- Unverified names are checked against the goal plus content the model saw (after redaction; table names aren't affected by it).
+- PySpark wording changed to "only when the user asks for it", in line with the user's "one decision per choice" rule.
+
+**Next steps:**
+- Live UI run with detailed_request.txt (names supplied, so no warnings expected), pii_sample.txt and injection_sample.txt.

@@ -79,6 +79,29 @@ def test_app_generates_prompt_from_goal_only(generate_calls):
     assert generate_calls == [{"content": "", "goal": "Weekly active users by country", "target": "data_analytics"}]
 
 
+def test_app_warns_about_table_names_not_in_input(generate_calls, monkeypatch):
+    def fake_generate_prompt(content: str, goal: str = "", target: str = "data_analytics") -> GeneratedPrompt:
+        return GeneratedPrompt(
+            target=target,
+            title="Monthly revenue by region",
+            sections={name: "Use main.sales.orders." for name in TARGETS[target]["required_sections"]},
+            final_prompt="SELECT region FROM main.sales.orders JOIN main.ref.fx_rates_daily f ON ...",
+        )
+
+    monkeypatch.setattr(generator, "generate_prompt", fake_generate_prompt)
+    at = submit("Monthly revenue by region", "Orders are in main.sales.orders")
+
+    assert not at.error
+    warnings = [warning.value for warning in at.warning]
+    assert warnings == ["These table names weren't in your input. Verify them before use: `main.ref.fx_rates_daily`"]
+    assert at.code[0].value.startswith("SELECT region")  # warn, don't block
+
+
+def test_app_shows_no_table_warning_for_placeholders(generate_calls):
+    at = submit(goal="need a sales report")
+    assert not at.warning
+
+
 def test_app_asks_for_input_when_everything_is_empty(generate_calls):
     at = submit()
 

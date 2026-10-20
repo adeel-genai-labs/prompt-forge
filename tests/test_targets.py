@@ -36,7 +36,29 @@ def test_target_has_all_fields_filled_in(key):
         "time zone",
         "row counts",
         "reconcile",
+        # Rules added after the first live Groq review
+        "Never invent table or column names",
+        "exactly as the user supplied them",
+        "exactly catalog.schema.table",
+        "<catalog>.<schema>.<table_name>",
+        "<revenue_column>",
+        '"Schema not provided"',
+        "Don't assume a specific year or date range",
+        '"last 12 complete months"',
+        ">= start AND < next_period_start",
+        "never use BETWEEN on timestamps",
+        "one decision per choice",
+        "don't offer alternatives",
+        "record each choice in assumptions",
+        "same filters, units and currency",
     ],
 )
 def test_data_analytics_guidance_covers_key_practices(phrase):
     assert phrase in TARGETS["data_analytics"]["guidance"]
+
+
+def test_data_analytics_guidance_has_no_conflicting_older_rules():
+    guidance = TARGETS["data_analytics"]["guidance"]
+    assert "explicit dates" not in guidance  # replaced by "don't assume a date range"
+    assert "whether boundaries are inclusive" not in guidance  # replaced by half-open ranges
+    assert "as the alternative" not in guidance  # replaced by "one decision per choice"

@@ -116,10 +116,12 @@ def run_pipeline(
     checks_passed.append("Output sections and secrets")
     prompt, counts = guardrails.redact_prompt(prompt)
     redactions.update(counts)
+    unverified_names = guardrails.find_unverified_names(prompt, f"{goal}\n{content}")
 
     report = {
         "redactions": dict(redactions),
         "injection_warnings": injection_warnings,
+        "unverified_names": unverified_names,
         "checks_passed": checks_passed,
     }
     return prompt, report
@@ -132,10 +134,13 @@ def stop_if(message: str | None) -> None:
 
 
 def render_report(report: dict) -> None:
-    """Show redaction counts, injection warnings and passed checks in an expander."""
+    """Show warnings (injection-like text, unverified table names), then redaction counts and passed checks."""
     if report["injection_warnings"]:
         phrases = ", ".join(f"'{phrase}'" for phrase in report["injection_warnings"])
         st.warning(f"Your content contains instruction-like text ({phrases}). It was treated as data, not followed.")
+    if report["unverified_names"]:
+        names = ", ".join(f"`{name}`" for name in report["unverified_names"])
+        st.warning(f"These table names weren't in your input. Verify them before use: {names}")
 
     with st.expander("Guardrails report"):
         if report["redactions"]:
@@ -197,7 +202,7 @@ def main() -> None:
     input -> file checks -> pdf pages -> extract -> combine with pasted text
     -> at least one of goal / content -> content checks (goal max 500) + blocked topics
     -> redact PII -> injection warnings -> generate
-    -> output check (required sections, secrets) + redact PII -> result
+    -> output check (required sections, secrets) + redact PII -> unverified table names (warning) -> result
     """
     st.set_page_config(page_title=PAGE_TITLE)
     load_settings()

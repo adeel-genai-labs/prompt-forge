@@ -59,6 +59,23 @@ PII_PATTERNS = {
     "PHONE": re.compile(r"(?<![\w+])(?:\+\d{1,3}[ -]?)?(?:\(\d{2,5}\)[ -]?\d{2,5}|\d{2,5})(?:[ -]\d{2,5}){1,3}(?![\w-])"),
 }
 
+# ISO dates, datetimes and times. "2023-01-01 00:00:00" would otherwise look like a phone
+# number ("2023-01-01 00" has 10 digits), so PII matches that overlap these are skipped.
+DATETIME_PATTERN = re.compile(
+    r"(?<!\d)\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?(?!\d)"
+    r"|(?<![\d:])\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?![\d:])"
+)
+
+# Dotted table names in generated prompts. Three parts (catalog.schema.table) count anywhere;
+# two parts (schema.table) only after a SQL keyword, since "o.order_id" is usually alias.column,
+# and not when followed by a comparison ("join o.order_id = r.order_id" compares columns).
+THREE_PART_NAME = re.compile(r"(?<![\w.@/<])[A-Za-z_]\w*\.[A-Za-z_]\w*\.[A-Za-z_]\w*")
+TWO_PART_NAME_AFTER_KEYWORD = re.compile(
+    r"\b(?:FROM|JOIN|INTO|TABLE|UPDATE|USING)\s+([A-Za-z_]\w*\.[A-Za-z_]\w*)(?![\w.])(?!\s*[=<>!])", re.IGNORECASE
+)
+# Web domains (e.g. docs.databricks.com) have the same shape as table names.
+DOMAIN_ENDINGS = {"com", "org", "net", "io", "ai", "dev", "co", "uk"}
+
 SECRET_PATTERNS = {
     "API key": re.compile(r"\bsk-[A-Za-z0-9_-]{20,}"),
     "AWS access key": re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
@@ -140,15 +157,19 @@ def redact_pii(text: str) -> tuple[str, dict[str, int]]:
     """Replace emails, phone numbers, card numbers and government IDs with tags like [EMAIL].
 
     Returns the redacted text and a count per tag (only tags that were found).
-    Runs on extracted content and again on the generated output.
+    Runs on extracted content and again on the generated output. Dates and times are never redacted.
     """
     validators = {"CARD": luhn_valid, "AADHAAR": verhoeff_valid, "PHONE": has_phone_length}
     counts: dict[str, int] = {}
 
     for name, pattern in PII_PATTERNS.items():
         is_valid = validators.get(name)
+        # Recomputed per pattern because each substitution changes the text and its positions.
+        datetime_spans = [match.span() for match in DATETIME_PATTERN.finditer(text)]
 
         def replace(match: re.Match) -> str:
+            if overlaps_any(match.span(), datetime_spans):
+                return match.group()
             if is_valid and not is_valid(match.group()):
                 return match.group()
             counts[name] = counts.get(name, 0) + 1
@@ -176,6 +197,27 @@ def redact_prompt(prompt: GeneratedPrompt) -> tuple[GeneratedPrompt, dict[str, i
         }
     )
     return redacted_prompt, dict(totals)
+
+
+def find_unverified_names(prompt: GeneratedPrompt, input_text: str) -> list[str]:
+    """Return dotted table names in the generated prompt that don't appear in the user's input.
+
+    Used to warn the user, not to block. Placeholders in <angle brackets> are ignored,
+    as are web domains. Matching ignores case and backticks.
+    """
+    output_text = "\n".join([prompt.title, *prompt.sections.values(), *prompt.assumptions, prompt.final_prompt])
+    output_text = output_text.replace("`", "")
+    input_text = input_text.replace("`", "")
+
+    names = THREE_PART_NAME.findall(output_text) + TWO_PART_NAME_AFTER_KEYWORD.findall(output_text)
+    unverified = []
+    for name in names:
+        if name.rsplit(".", 1)[-1].lower() in DOMAIN_ENDINGS:
+            continue
+        in_input = re.search(rf"(?<![\w.]){re.escape(name)}(?![\w])", input_text, flags=re.IGNORECASE)
+        if not in_input and name.lower() not in (seen.lower() for seen in unverified):
+            unverified.append(name)
+    return unverified
 
 
 def find_injection_attempts(text: str) -> list[str]:
@@ -253,6 +295,12 @@ def verhoeff_valid(number: str) -> bool:
     for position, digit in enumerate(int(c) for c in reversed(number) if c.isdigit()):
         check = _VERHOEFF_D[check][_VERHOEFF_P[position % 8][digit]]
     return check == 0
+
+
+def overlaps_any(span: tuple[int, int], spans: list[tuple[int, int]]) -> bool:
+    """Return True if span overlaps any of spans (each a (start, end) pair, end exclusive)."""
+    start, end = span
+    return any(start < other_end and other_start < end for other_start, other_end in spans)
 
 
 def has_phone_length(number: str) -> bool:
