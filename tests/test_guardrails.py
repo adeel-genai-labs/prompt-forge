@@ -16,24 +16,26 @@ def make_pdf(page_count: int) -> bytes:
         return pdf.tobytes()
 
 
-def make_prompt(target: str = "coding_agent", **changes) -> GeneratedPrompt:
-    """Return a valid GeneratedPrompt for target, with optional field overrides."""
-    sections = {name: f"Text for {name}." for name in TARGETS[target]["required_sections"]}
-    fields = {"target": target, "title": "Sample", "sections": sections, "final_prompt": "Do the task."}
-    if target == "image_generation":
-        fields["negative_prompt"] = "blurry, watermark, extra fingers"
+def make_prompt(**changes) -> GeneratedPrompt:
+    """Return a valid data_analytics GeneratedPrompt, with optional field overrides."""
+    sections = {name: f"Text for {name}." for name in TARGETS["data_analytics"]["required_sections"]}
+    fields = {"target": "data_analytics", "title": "Sample", "sections": sections, "final_prompt": "Do the task."}
     return GeneratedPrompt(**{**fields, **changes})
 
 
 # --- check_file ---
 
 
-@pytest.mark.parametrize("file_name", ["notes.txt", "brief.PDF", "report.docx", "photo.jpeg"])
+def test_allowed_extensions_are_documents_only():
+    assert guardrails.ALLOWED_EXTENSIONS == {"txt", "md", "pdf", "docx"}
+
+
+@pytest.mark.parametrize("file_name", ["notes.txt", "notes.md", "brief.PDF", "report.docx"])
 def test_check_file_accepts_supported_types(file_name):
     assert guardrails.check_file(file_name, b"content") is None
 
 
-@pytest.mark.parametrize("file_name", ["script.exe", "data.xlsx", "no_extension"])
+@pytest.mark.parametrize("file_name", ["script.exe", "data.xlsx", "no_extension", "photo.png", "scan.jpeg"])
 def test_check_file_rejects_unsupported_types(file_name):
     assert "isn't a supported file type" in guardrails.check_file(file_name, b"content")
 
@@ -42,14 +44,9 @@ def test_check_file_rejects_empty_file():
     assert "is empty" in guardrails.check_file("notes.txt", b"")
 
 
-def test_check_file_applies_10_mb_limit_to_documents():
+def test_check_file_applies_10_mb_limit():
     assert guardrails.check_file("big.pdf", b"x" * guardrails.MAX_FILE_BYTES) is None
     assert "up to 10 MB" in guardrails.check_file("big.pdf", b"x" * (guardrails.MAX_FILE_BYTES + 1))
-
-
-def test_check_file_applies_5_mb_limit_to_images():
-    assert guardrails.check_file("photo.png", b"x" * guardrails.MAX_IMAGE_BYTES) is None
-    assert "up to 5 MB" in guardrails.check_file("photo.png", b"x" * (guardrails.MAX_IMAGE_BYTES + 1))
 
 
 # --- check_pdf_pages ---
@@ -127,25 +124,6 @@ def test_check_blocked_topics_allows_ordinary_text(text):
     assert guardrails.check_blocked_topics(text) is None
 
 
-# --- check_image_request ---
-
-
-@pytest.mark.parametrize(
-    "text, category",
-    [
-        ("Pikachu surfing a wave", "copyrighted characters"),
-        ("A sneaker ad with the Nike logo", "brand logos"),
-        ("Realistic portrait of Taylor Swift", "real people"),
-    ],
-)
-def test_check_image_request_names_the_category(text, category):
-    assert category in guardrails.check_image_request(text)
-
-
-def test_check_image_request_allows_original_subjects():
-    assert guardrails.check_image_request("A friendly yellow robot surfing at sunset, 16:9") is None
-
-
 # --- redact_pii ---
 
 
@@ -208,14 +186,41 @@ def test_redact_prompt_redacts_every_field_and_totals_counts():
         assumptions=["Contact b@example.com"],
         final_prompt="Call +1 555-010-0199 or email a@example.com",
     )
-    prompt.sections["Goal"] = "SSN 123-45-6789"
+    prompt.sections["Business question"] = "SSN 123-45-6789"
     redacted, counts = guardrails.redact_prompt(prompt)
     assert redacted.title == "For [EMAIL]"
-    assert redacted.sections["Goal"] == "SSN [US_SSN]"
+    assert redacted.sections["Business question"] == "SSN [US_SSN]"
     assert redacted.assumptions == ["Contact [EMAIL]"]
     assert redacted.final_prompt == "Call [PHONE] or email [EMAIL]"
     assert counts == {"EMAIL": 3, "PHONE": 1, "US_SSN": 1}
     assert prompt.title == "For a@example.com"  # original is not modified
+
+
+def test_missing_output_fields_lists_sections_in_order_then_final_prompt():
+    prompt = make_prompt(final_prompt="")
+    del prompt.sections["Filters & time range"]
+    prompt.sections["Data sources"] = " "
+    assert guardrails.missing_output_fields(prompt) == ["Data sources", "Filters & time range", "final_prompt"]
+
+
+def test_missing_output_fields_is_empty_for_complete_prompt():
+    assert guardrails.missing_output_fields(make_prompt()) == []
+
+
+# --- check_has_input ---
+
+
+@pytest.mark.parametrize(
+    "goal, content",
+    [("Monthly churn by plan", ""), ("", "need a sales report"), ("Monthly churn by plan", "Use main.crm.subs")],
+    ids=["goal only", "content only", "both"],
+)
+def test_check_has_input_accepts_goal_or_content(goal, content):
+    assert guardrails.check_has_input(goal, content) is None
+
+
+def test_check_has_input_rejects_neither():
+    assert "describe what the prompt is for" in guardrails.check_has_input("  ", "\n\t")
 
 
 # --- find_injection_attempts ---
@@ -247,41 +252,29 @@ def test_wrap_as_data_escapes_closing_tags_inside_text():
 # --- check_output ---
 
 
-@pytest.mark.parametrize("target", list(TARGETS))
-def test_check_output_accepts_complete_prompt(target):
-    assert guardrails.check_output(make_prompt(target)) is None
+def test_check_output_accepts_complete_prompt():
+    assert guardrails.check_output(make_prompt()) is None
 
 
 def test_check_output_ignores_section_name_capitalisation():
-    sections = {name.upper(): "text" for name in TARGETS["coding_agent"]["required_sections"]}
+    sections = {name.upper(): "text" for name in TARGETS["data_analytics"]["required_sections"]}
     assert guardrails.check_output(make_prompt(sections=sections)) is None
 
 
-def test_check_output_rejects_unknown_target():
-    prompt = make_prompt()
-    prompt.target = "poetry"
-    assert "Unknown prompt target" in guardrails.check_output(prompt)
+@pytest.mark.parametrize("target", ["poetry", "coding_agent", "image_generation"])
+def test_check_output_rejects_unknown_or_removed_target(target):
+    assert "unknown target" in guardrails.check_output(make_prompt(target=target))
 
 
 def test_check_output_rejects_missing_and_empty_sections():
     prompt = make_prompt()
-    del prompt.sections["Tasks"]
-    prompt.sections["Constraints"] = "   "
-    assert "missing: Tasks, Constraints" in guardrails.check_output(prompt)
-
-
-@pytest.mark.parametrize("negative_prompt", ["", "   "])
-def test_check_output_requires_negative_prompt_for_images(negative_prompt):
-    prompt = make_prompt("image_generation", negative_prompt=negative_prompt)
-    assert "missing its negative prompt" in guardrails.check_output(prompt)
-
-
-def test_check_output_does_not_require_negative_prompt_for_other_targets():
-    assert guardrails.check_output(make_prompt("coding_agent", negative_prompt="")) is None
+    del prompt.sections["Data sources"]
+    prompt.sections["Definitions & metrics"] = "   "
+    assert "missing: Data sources, Definitions & metrics" in guardrails.check_output(prompt)
 
 
 def test_check_output_rejects_empty_final_prompt():
-    assert "came back empty" in guardrails.check_output(make_prompt(final_prompt="  "))
+    assert "missing: final_prompt" in guardrails.check_output(make_prompt(final_prompt="  "))
 
 
 # Fake secrets are assembled from parts so secret scanners don't flag this file.

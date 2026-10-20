@@ -1,0 +1,21 @@
+Request from the Finance team (fictional example)
+
+We need monthly revenue by region for January to September 2026, to compare regions in the Q3 business review.
+
+Data:
+- Orders are in main.sales.orders (one row per order): order_id, customer_id, order_ts (UTC), status, currency, gross_amount
+- Refunds are in main.sales.refunds (one row per refund): refund_id, order_id, refund_ts (UTC), refund_amount
+- Regions come from main.ref.customer_region (one row per customer): customer_id, region
+- Currency conversion is in main.ref.fx_rates_daily (one row per currency per day): rate_date, currency, usd_rate
+
+Definitions:
+- Revenue = gross_amount minus refunds, converted to USD using the rate on the order date.
+- Only orders with status 'completed'. Exclude test customers (customer_id starting with 'TEST').
+- Months are calendar months in UTC.
+
+Output:
+- Columns: month (first day of month), region, revenue_usd, order_count
+- One row per month per region, sorted by month then region.
+- Please include a check that the 2026 total matches the finance dashboard figure of 4,812,300 USD (within 0.5%).
+
+Read-only please, we just need the query.

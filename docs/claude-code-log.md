@@ -235,3 +235,76 @@
 - Live run: `ollama pull llama3.2` and `ollama pull llama3.2-vision`, then `streamlit run app.py`; try each samples/ file and each target.
 - Check that claude-sonnet-5-5 accepts `temperature`.
 - v2: ask_clarifying_questions, refine_prompt.
+
+## 2026-10-20 — Strict Ollama schema, output retry, goal-only input
+
+**Goal:** Fix a live-test failure (Ollama/llama3.2 returned an image prompt with no negative_prompt, which check_output rejected) and allow goal-only input.
+
+**Files changed:**
+- src/generator.py: new `build_json_schema(target)` (the target's exact section names required as non-empty strings, `additionalProperties: false`, target fixed with an enum, non-empty final_prompt, negative_prompt required and non-empty for image_generation), used instead of the generic schema. `generate_prompt` now runs check_output after parsing and retries once with a follow-up from the new `build_output_retry_message`; at most 3 calls (first attempt + one JSON retry + one output retry). `build_user_message` allows goal-only input (no `<user_content>` block; adds NO_CONTENT_NOTE) and rejects empty input. New constants NO_CONTENT_NOTE and UNUSABLE_REPLY_MESSAGE.
+- src/guardrails.py: new `missing_output_fields(prompt)` (shared by check_output and the retry message) and `check_has_input(goal, content)`. check_output's missing-parts messages are now one format: "missing: Tasks, final_prompt, negative_prompt".
+- app.py: requires at least one of goal / pasted text / file, and checks content length only when there is content; comment explains why the final check_output is kept; text area label is now "Paste text (optional)".
+- tests/test_generator.py: valid_json takes overrides and gives image replies a negative_prompt; new tests for the strict schema per target, output retry (succeeds, fails twice, call budget), the retry message wording, and goal-only / content-only / both / neither.
+- tests/test_guardrails.py: tests for missing_output_fields and check_has_input; two message assertions updated to the new format.
+- tests/test_app.py: shared mock fixture; new goal-only and empty-input cases.
+
+**Commands run:**
+- `.venv\Scripts\python.exe -m pytest -v`: 189 passed (after updating 2 tests that still expected the generic schema)
+
+**Result:** Ollama structured outputs now enforce the target's sections and the negative_prompt; anything that still slips through gets one targeted retry. Goal-only prompts work. Not yet re-tested live.
+
+**Issues & fixes:**
+- Image prompt without negative_prompt from llama3.2 → the generic Pydantic schema makes negative_prompt optional and sections a free-form dict, so structured outputs didn't enforce them → per-target strict schema plus one output retry.
+- Python edit scripts sent through Bash heredocs turned `\n` into real line breaks (once leaving a syntax error in a test, once leaving a generator edit half-applied) → backslash handling on the Git Bash path → fixed by hand; used the Edit tool for any text with backslashes.
+
+**Decisions:**
+- Retry budget is tracked with two flags in one loop, so the limit is exactly one JSON retry plus one output retry, in any order.
+- The retry message uses missing_output_fields, so it names the exact missing parts (e.g. `"Tasks" section, final_prompt`). For other check_output failures (unknown target, leaked secret) it passes on check_output's message instead.
+- check_output stays in app.py as a final safety check; it can't change the result, because generate_prompt only returns prompts that pass it.
+- A file that yields no text, with no goal or pasted text, fails check_has_input with the generic "describe / paste / upload" message.
+
+**Next steps:**
+- Re-run the live Ollama test for all three targets, including goal-only.
+- Check that claude-sonnet-5-5 accepts `temperature`.
+
+## 2026-10-20 — Scope change: Databricks data & analytics only, plus Groq provider
+
+**Goal:** Narrow PromptForge to one use case (safe, Databricks-ready SQL/analytics prompts), remove the coding and image use cases (preserved by the user in git tag multi-target-v0), add Groq via an OpenAI-compatible provider module, and rebrand.
+
+**Files changed:**
+- src/targets.py: only `data_analytics` remains (dict shape kept); DEFAULT_TARGET = "data_analytics"
+- src/extractors.py: removed extract_image and IMAGE_MEDIA_TYPES, and the import of generator; added SUPPORTED_EXTENSIONS (txt, md, pdf, docx)
+- src/guardrails.py: removed MAX_IMAGE_BYTES, IMAGE_EXTENSIONS, IMAGE_BLOCKED_PHRASES, check_image_request and the negative_prompt checks; ALLOWED_EXTENSIONS = SUPPORTED_EXTENSIONS; check_file uses extractors.file_extension again (no circular import any more)
+- src/schema.py: removed the image-only `negative_prompt` field
+- Added src/providers.py: PROVIDERS dict (groq), read_api_key, provider_model, call_openai_compatible (JSON mode, max_retries=1, friendly errors)
+- src/generator.py: removed describe_image, the vision model and image parameters; SUPPORTED_PROVIDERS = ollama, anthropic + PROVIDERS keys; model_for(provider); call_model routes groq to call_openai_compatible; call_anthropic uses read_api_key and handles 429; system prompt tells the model to keep [EMAIL]-style tags and never guess the original values
+- app.py: no target selectbox; render_input returns (goal, pasted_text, uploaded_file); new title "PromptForge for Databricks" and tagline; sidebar shows provider + model; uploads limited to txt/md/pdf/docx; negative prompt display removed
+- CLAUDE.md: new scope section (Databricks only, removed targets in tag multi-target-v0), providers.py and targets.py added to Structure
+- .env.example: added GROQ_API_KEY and GROQ_TEXT_MODEL; removed OLLAMA_VISION_MODEL
+- requirements.txt: added openai (approved by the user)
+- samples/: added vague_request.txt and detailed_request.txt; README.md rewritten. No image samples existed, so nothing to delete.
+- tests/: test_targets, test_schema, test_generator and test_app rewritten; test_extractors and test_guardrails updated; new test_providers.py
+
+**Commands run:**
+- `.venv\Scripts\python.exe -m pip install openai`: installed openai 3.35.1
+- `.venv\Scripts\python.exe -m pytest -v`: 175 passed
+- redact_pii / find_injection_attempts on the two new samples: no false positives
+- grep for leftover image/coding references: only tests asserting they are gone
+
+**Result:** Single-target Databricks app with three providers (ollama, groq, anthropic). Strict schema, output retry and goal-only input (done in the previous entry) carry over. Not yet tested live with Groq.
+
+**Issues & fixes:**
+- Removing the targets broke about 60 tests that used coding_agent/image_generation fixtures → expected → rewrote the fixtures around data_analytics, and added tests asserting the removed targets, image types and negative_prompt stay gone.
+
+**Decisions:**
+- Removed `negative_prompt` from the schema, not only its checks: it was image-only, and a dead field would confuse the model and the code.
+- providers.py holds both the PROVIDERS data and call_openai_compatible, so adding an OpenAI-compatible provider means adding one dict entry.
+- `read_api_key` is shared by Groq and Anthropic, so every missing-key message names its env var; "your-key-here" counts as missing.
+- openai client `max_retries=1`: the default retries and backoff on 429 could leave the UI spinning; the user gets the rate-limit message quickly instead.
+- Anthropic also maps 429 to the same rate-limit message, for consistency.
+- Kept sample.txt/pdf/docx for upload testing; README says what they're for in the new scope.
+- `run_pipeline` keeps a `target` parameter (default DEFAULT_TARGET), so a future target needs no signature change.
+
+**Next steps:**
+- Live test with Groq (GROQ_API_KEY in .env, LLM_PROVIDER=groq) using vague_request.txt, detailed_request.txt and goal-only input.
+- Re-test with Ollama llama3.2 on the strict schema.

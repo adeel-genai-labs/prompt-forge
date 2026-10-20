@@ -6,21 +6,18 @@ that the UI can show to the user as-is.
 
 import re
 from collections import Counter
-from pathlib import Path
 
 import pymupdf
 
+from src.extractors import SUPPORTED_EXTENSIONS, file_extension
 from src.schema import GeneratedPrompt
 from src.targets import TARGETS
 
 MAX_FILE_BYTES = 10 * 1024 * 1024
-# Anthropic rejects larger images, so enforce it for both providers to keep behaviour consistent.
-MAX_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_PDF_PAGES = 30
 MAX_TEXT_CHARS = 50_000
 MAX_GOAL_CHARS = 500
-ALLOWED_EXTENSIONS = {"txt", "md", "pdf", "docx", "png", "jpg", "jpeg", "webp"}
-IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "webp"}
+ALLOWED_EXTENSIONS = SUPPORTED_EXTENSIONS
 
 # Multi-word phrases only, so ordinary text like "kill the process" or "photobomb" passes.
 # self-harm comes first so it gets the supportive message if several topics match.
@@ -34,13 +31,6 @@ SELF_HARM_MESSAGE = (
     "Please consider reaching out to someone you trust or a local helpline. "
     "If you are in immediate danger, contact your local emergency number."
 )
-
-# Exact-phrase matching can't recognise every name; this catches the obvious cases.
-IMAGE_BLOCKED_PHRASES = {
-    "copyrighted characters": ["mickey mouse", "spider-man", "pikachu", "darth vader", "harry potter", "super mario"],
-    "brand logos": ["nike logo", "apple logo", "coca-cola logo", "mcdonald's logo", "starbucks logo"],
-    "real people": ["photo of president", "photo of the prime minister", "taylor swift", "elon musk"],
-}
 
 INJECTION_PHRASES = [
     "ignore previous instructions",
@@ -102,18 +92,14 @@ _VERHOEFF_P = [
 
 
 def check_file(file_name: str, data: bytes) -> str | None:
-    """Reject unsupported types, empty files, files over MAX_FILE_BYTES and images over MAX_IMAGE_BYTES."""
-    # Not imported from extractors: extractors -> generator -> guardrails would be a circular import.
-    extension = Path(file_name).suffix.lower().lstrip(".")
-    if extension not in ALLOWED_EXTENSIONS:
+    """Reject unsupported types, empty files and files over MAX_FILE_BYTES."""
+    if file_extension(file_name) not in ALLOWED_EXTENSIONS:
         allowed = ", ".join(sorted(ALLOWED_EXTENSIONS))
         return f"Sorry, '{file_name}' isn't a supported file type. Please upload one of: {allowed}."
     if not data:
         return f"'{file_name}' is empty. Please choose a file with some content."
-    limit = MAX_IMAGE_BYTES if extension in IMAGE_EXTENSIONS else MAX_FILE_BYTES
-    if len(data) > limit:
-        kind = "Images" if extension in IMAGE_EXTENSIONS else "Files"
-        return f"'{file_name}' is too large. {kind} can be up to {limit // (1024 * 1024)} MB."
+    if len(data) > MAX_FILE_BYTES:
+        return f"'{file_name}' is too large. Files can be up to {MAX_FILE_BYTES // (1024 * 1024)} MB."
     return None
 
 
@@ -147,18 +133,6 @@ def check_blocked_topics(text: str) -> str | None:
             if topic == "self-harm":
                 return SELF_HARM_MESSAGE
             return f"Sorry, PromptForge can't help with content about {topic}. Please remove that part and try again."
-    return None
-
-
-def check_image_request(text: str) -> str | None:
-    """For image_generation: reject requests that match IMAGE_BLOCKED_PHRASES, naming the category."""
-    for category, phrases in IMAGE_BLOCKED_PHRASES.items():
-        found = matching_phrases(text, phrases)
-        if found:
-            return (
-                f"Image prompts can't include {category} (found: '{found[0]}'). "
-                "Please describe an original subject instead."
-            )
     return None
 
 
@@ -199,7 +173,6 @@ def redact_prompt(prompt: GeneratedPrompt) -> tuple[GeneratedPrompt, dict[str, i
             "sections": {name: redact(text) for name, text in prompt.sections.items()},
             "assumptions": [redact(text) for text in prompt.assumptions],
             "final_prompt": redact(prompt.final_prompt),
-            "negative_prompt": redact(prompt.negative_prompt),
         }
     )
     return redacted_prompt, dict(totals)
@@ -219,33 +192,38 @@ def wrap_as_data(text: str) -> str:
 
 def check_output(prompt: GeneratedPrompt) -> str | None:
     """Reject a generated prompt that has an unknown target, a missing or empty required section
-    for that target (from TARGETS), an empty final_prompt, an image prompt without a negative_prompt,
-    or text that looks like a leaked secret."""
+    for that target (from TARGETS), an empty final_prompt, or text that looks like a leaked secret."""
     if prompt.target not in TARGETS:
-        return f"Unknown prompt target '{prompt.target}'. Please choose a target from the list and try again."
-
-    # Models vary capitalisation ("Acceptance Criteria"), which shouldn't fail the check.
-    sections = {name.strip().lower(): text for name, text in prompt.sections.items()}
-    missing = [
-        name for name in TARGETS[prompt.target]["required_sections"]
-        if not sections.get(name.lower(), "").strip()
-    ]
+        return f"The generated prompt has an unknown target '{prompt.target}'. Please try generating it again."
+    missing = missing_output_fields(prompt)
     if missing:
         return f"The generated prompt is missing: {', '.join(missing)}. Please try generating it again."
-    if not prompt.final_prompt.strip():
-        return "The generated prompt came back empty. Please try generating it again."
-    if prompt.target == "image_generation" and not prompt.negative_prompt.strip():
-        return "The image prompt is missing its negative prompt (what to avoid). Please try generating it again."
 
-    all_text = "\n".join(
-        [prompt.title, *prompt.sections.values(), *prompt.assumptions, prompt.final_prompt, prompt.negative_prompt]
-    )
+    all_text = "\n".join([prompt.title, *prompt.sections.values(), *prompt.assumptions, prompt.final_prompt])
     for name, pattern in SECRET_PATTERNS.items():
         if pattern.search(all_text):
             return (
                 f"The generated prompt appears to contain a secret ({name}), so it was blocked. "
                 "Please remove any keys or tokens from your input and try again."
             )
+    return None
+
+
+def missing_output_fields(prompt: GeneratedPrompt) -> list[str]:
+    """Return required parts that are missing or empty: the target's section names, then 'final_prompt'."""
+    # Models vary capitalisation ("Data Sources"), which shouldn't count as missing.
+    sections = {name.strip().lower(): text for name, text in prompt.sections.items()}
+    required = TARGETS.get(prompt.target, {}).get("required_sections", [])
+    missing = [name for name in required if not sections.get(name.lower(), "").strip()]
+    if not prompt.final_prompt.strip():
+        missing.append("final_prompt")
+    return missing
+
+
+def check_has_input(goal: str, content: str) -> str | None:
+    """Require at least one of a goal or some content (pasted text or file text)."""
+    if not goal.strip() and not content.strip():
+        return "Please describe what the prompt is for, paste some text, or upload a file."
     return None
 
 

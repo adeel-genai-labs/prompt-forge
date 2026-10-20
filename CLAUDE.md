@@ -1,11 +1,20 @@
-# PromptForge
-Streamlit app that converts text, images, PDFs and DOCX into structured LLM prompts, with guardrails.
+# PromptForge for Databricks
+Streamlit app that turns vague data requests (text, PDF, DOCX) into safe, Databricks-ready SQL/analytics
+prompts, with guardrails that keep personal data away from the model.
+
+## Scope
+- One use case: Databricks data & analytics prompts (Databricks SQL by default, PySpark as an option).
+- Coding-agent and image-generation targets were removed; they are preserved in git tag `multi-target-v0`.
+  Don't re-add them unless asked. TARGETS keeps its dict shape so targets can be added later.
+- Inputs: goal, pasted text, and txt / md / pdf / docx uploads. No images.
 
 ## Structure
 - app.py — Streamlit UI only, no business logic
 - src/extractors.py — one function per input type, returns plain text
 - src/guardrails.py — input, content and output checks
-- src/generator.py — LLM provider switch (ollama | anthropic via LLM_PROVIDER env)
+- src/generator.py — prompt generation and LLM provider switch (ollama | groq | anthropic via LLM_PROVIDER env)
+- src/providers.py — PROVIDERS dict and calls for OpenAI-compatible APIs (e.g. Groq)
+- src/targets.py — TARGETS dict: guidance and required sections per target (data_analytics only)
 - src/schema.py — Pydantic model for the generated prompt
 - tests/ — pytest, one test file per module
 

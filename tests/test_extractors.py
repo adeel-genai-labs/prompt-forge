@@ -6,7 +6,7 @@ import docx
 import pymupdf
 import pytest
 
-from src import extractors, generator
+from src import extractors
 
 
 def make_pdf(pages: list[str]) -> bytes:
@@ -71,20 +71,7 @@ def test_extract_docx_rejects_damaged_file():
         extractors.extract_docx(b"not a docx")
 
 
-def test_extract_file_dispatches_images_to_vision_model(monkeypatch):
-    calls = []
-
-    def fake_describe_image(data: bytes, media_type: str) -> str:
-        calls.append((data, media_type))
-        return "  A whiteboard listing three tasks.  "
-
-    monkeypatch.setattr(generator, "describe_image", fake_describe_image)
-
-    assert extractors.extract_file("board.JPG", b"fake-image") == "A whiteboard listing three tasks."
-    assert calls == [(b"fake-image", "image/jpeg")]
-
-
-@pytest.mark.parametrize("file_name", ["data.xlsx", "README"])
+@pytest.mark.parametrize("file_name", ["data.xlsx", "README", "photo.png", "scan.jpg"])
 def test_extract_file_rejects_unsupported_type(file_name):
     with pytest.raises(ValueError, match="isn't a supported file type"):
         extractors.extract_file(file_name, b"anything")

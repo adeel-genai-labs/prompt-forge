@@ -1,4 +1,4 @@
-"""PromptForge Streamlit UI. Business logic lives in src/."""
+"""PromptForge for Databricks: Streamlit UI. Business logic lives in src/."""
 
 import logging
 import os
@@ -13,6 +13,8 @@ from src import extractors, generator, guardrails
 from src.schema import GeneratedPrompt
 from src.targets import DEFAULT_TARGET, TARGETS
 
+PAGE_TITLE = "PromptForge for Databricks"
+TAGLINE = "Turn vague data requests into safe, Databricks-ready prompts without leaking personal data."
 UPLOAD_TYPES = sorted(guardrails.ALLOWED_EXTENSIONS)
 GUARDRAILS_NOTE = (
     "Guardrails check file size and type, block unsafe topics, redact personal data before anything reaches "
@@ -32,7 +34,7 @@ def load_settings() -> None:
 
 
 def render_sidebar() -> None:
-    """Show the current provider and model names, and a one-line note on what guardrails do."""
+    """Show the current provider and model, and a one-line note on what guardrails do."""
     with st.sidebar:
         st.header("Settings")
         try:
@@ -41,40 +43,34 @@ def render_sidebar() -> None:
             st.error(str(error))
         else:
             st.markdown(f"**Provider:** `{provider}`")
-            if provider == "ollama":
-                st.markdown(f"**Text model:** `{generator.model_for('ollama')}`")
-                st.markdown(f"**Vision model:** `{generator.model_for('ollama', image=True)}`")
-            else:
-                st.markdown(f"**Model:** `{generator.model_for('anthropic')}`")
+            st.markdown(f"**Model:** `{generator.model_for(provider)}`")
         st.caption(GUARDRAILS_NOTE)
 
 
-def render_input() -> tuple[str, str, str, UploadedFile | None] | None:
-    """Show the target selectbox (TARGETS labels), goal field, text box, file uploader and Generate button.
+def render_input() -> tuple[str, str, UploadedFile | None] | None:
+    """Show the goal field, text box, file uploader and Generate button.
 
-    Returns (target_key, goal, pasted_text, uploaded_file) when Generate is pressed, otherwise None.
-    Text and a file may be given together; main() combines their content.
+    Returns (goal, pasted_text, uploaded_file) when Generate is pressed, otherwise None.
+    Any one of the three is enough; main() combines text and file content.
     """
     # A form stops Streamlit from rerunning the page on every keystroke.
     with st.form("input"):
-        target = st.selectbox(
-            "Prompt target",
-            options=list(TARGETS),
-            index=list(TARGETS).index(DEFAULT_TARGET),
-            format_func=lambda key: TARGETS[key]["label"],
+        goal = st.text_input(
+            "What is this prompt for?",
+            max_chars=guardrails.MAX_GOAL_CHARS,
+            placeholder="e.g. Monthly revenue by region for 2026",
         )
-        goal = st.text_input("What is this prompt for?", max_chars=guardrails.MAX_GOAL_CHARS)
-        pasted_text = st.text_area("Paste text (optional if you upload a file)", height=200)
+        pasted_text = st.text_area("Paste the data request or notes (optional)", height=200)
         uploaded_file = st.file_uploader("Or upload a file", type=UPLOAD_TYPES)
         submitted = st.form_submit_button("Generate", type="primary")
 
     if not submitted:
         return None
-    return target, goal, pasted_text, uploaded_file
+    return goal, pasted_text, uploaded_file
 
 
 def run_pipeline(
-    target: str, goal: str, pasted_text: str, uploaded_file: UploadedFile | None
+    goal: str, pasted_text: str, uploaded_file: UploadedFile | None, target: str = DEFAULT_TARGET
 ) -> tuple[GeneratedPrompt, dict]:
     """Run the guardrails, extraction and generation steps; return the prompt and a guardrails report.
 
@@ -89,21 +85,20 @@ def run_pipeline(
         if extractors.file_extension(uploaded_file.name) == "pdf":
             stop_if(guardrails.check_pdf_pages(data))
         checks_passed.append("File type, size and page count")
-        with st.spinner("Reading your file..."):
-            parts.append(extractors.extract_file(uploaded_file.name, data))
+        parts.append(extractors.extract_file(uploaded_file.name, data))
     parts.append(extractors.extract_text(pasted_text))
     content = "\n\n".join(part for part in parts if part)
 
-    stop_if(guardrails.check_content(content))
+    # Goal-only input is allowed: the model then works from the goal and lists its assumptions.
+    stop_if(guardrails.check_has_input(goal, content))
+    if content:
+        stop_if(guardrails.check_content(content))
     if goal.strip():
         stop_if(guardrails.check_content(goal, max_chars=guardrails.MAX_GOAL_CHARS))
     checks_passed.append("Content length")
 
     stop_if(guardrails.check_blocked_topics(f"{goal}\n{content}"))
     checks_passed.append("Blocked topics")
-    if target == "image_generation":
-        stop_if(guardrails.check_image_request(f"{goal}\n{content}"))
-        checks_passed.append("Image request (no copyrighted characters, logos or real people)")
 
     redactions: Counter[str] = Counter()
     content, counts = guardrails.redact_pii(content)
@@ -115,6 +110,8 @@ def run_pipeline(
     with st.spinner("Generating your prompt..."):
         prompt = generator.generate_prompt(content, goal, target)
 
+    # generate_prompt already retries until check_output passes, so this never changes the result;
+    # it stays as a final safety check in case the generator changes.
     stop_if(guardrails.check_output(prompt))
     checks_passed.append("Output sections and secrets")
     prompt, counts = guardrails.redact_prompt(prompt)
@@ -153,14 +150,9 @@ def render_report(report: dict) -> None:
 
 
 def render_result(prompt: GeneratedPrompt) -> None:
-    """Show the title, the final prompt in a copyable code block, the negative prompt when there is one,
-    assumptions, sections, and a Markdown download."""
+    """Show the title, the final prompt in a copyable code block, assumptions, sections, and a Markdown download."""
     st.subheader(prompt.title)
     st.code(prompt.final_prompt, language="markdown", wrap_lines=True)
-
-    if prompt.negative_prompt:
-        st.markdown("**Negative prompt**")
-        st.code(prompt.negative_prompt, language="text", wrap_lines=True)
 
     if prompt.assumptions:
         st.markdown("**Assumptions**")
@@ -182,8 +174,6 @@ def render_result(prompt: GeneratedPrompt) -> None:
 def to_markdown(prompt: GeneratedPrompt) -> str:
     """Return the whole prompt as a Markdown document for download."""
     lines = [f"# {prompt.title}", "", f"Target: {TARGETS[prompt.target]['label']}", "", "## Final prompt", "", prompt.final_prompt]
-    if prompt.negative_prompt:
-        lines += ["", "## Negative prompt", "", prompt.negative_prompt]
     for name, text in prompt.sections.items():
         lines += ["", f"## {name}", "", text]
     if prompt.assumptions:
@@ -192,7 +182,7 @@ def to_markdown(prompt: GeneratedPrompt) -> str:
 
 
 def slugify(text: str) -> str:
-    """Return a safe file name stem, e.g. 'Rate-limit logins!' -> 'rate-limit-logins'."""
+    """Return a safe file name stem, e.g. 'Monthly revenue by region!' -> 'monthly-revenue-by-region'."""
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-") or "prompt"
 
 
@@ -204,16 +194,16 @@ def show_error(message: str) -> None:
 def main() -> None:
     """Wire the page together.
 
-    input -> file checks -> pdf pages -> extract (images described first) -> combine with pasted text
-    -> content checks (goal max 500) + blocked topics (+ image request check for image_generation)
-    -> redact PII -> injection warnings -> generate for the chosen target
+    input -> file checks -> pdf pages -> extract -> combine with pasted text
+    -> at least one of goal / content -> content checks (goal max 500) + blocked topics
+    -> redact PII -> injection warnings -> generate
     -> output check (required sections, secrets) + redact PII -> result
     """
-    st.set_page_config(page_title="PromptForge")
+    st.set_page_config(page_title=PAGE_TITLE)
     load_settings()
 
-    st.title("PromptForge")
-    st.caption("Turn notes, documents and images into structured prompts for coding agents, analytics and image tools.")
+    st.title(PAGE_TITLE)
+    st.caption(TAGLINE)
     render_sidebar()
 
     request = render_input()

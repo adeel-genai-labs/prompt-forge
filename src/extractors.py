@@ -7,15 +7,8 @@ from pathlib import Path
 import docx
 import pymupdf
 
-from src import generator
-
 TEXT_EXTENSIONS = {"txt", "md"}
-IMAGE_MEDIA_TYPES = {
-    "png": "image/png",
-    "jpg": "image/jpeg",
-    "jpeg": "image/jpeg",
-    "webp": "image/webp",
-}
+SUPPORTED_EXTENSIONS = TEXT_EXTENSIONS | {"pdf", "docx"}
 
 
 def extract_text(text: str) -> str:
@@ -49,12 +42,6 @@ def extract_docx(data: bytes) -> str:
     return extract_text("\n".join(parts))
 
 
-def extract_image(data: bytes, media_type: str) -> str:
-    """Return a text description of an image, produced by the vision model."""
-    # No OCR: the vision model reads text and describes layout in one step.
-    return extract_text(generator.describe_image(data, media_type))
-
-
 def extract_file(file_name: str, data: bytes) -> str:
     """Pick the right extractor from the file extension and return its text."""
     extension = file_extension(file_name)
@@ -64,14 +51,11 @@ def extract_file(file_name: str, data: bytes) -> str:
         return extract_pdf(data)
     if extension == "docx":
         return extract_docx(data)
-    if extension in IMAGE_MEDIA_TYPES:
-        return extract_image(data, IMAGE_MEDIA_TYPES[extension])
 
-    supported = ", ".join(sorted(TEXT_EXTENSIONS | IMAGE_MEDIA_TYPES.keys() | {"pdf", "docx"}))
+    supported = ", ".join(sorted(SUPPORTED_EXTENSIONS))
     raise ValueError(f"Sorry, '{file_name}' isn't a supported file type. Please upload one of: {supported}.")
 
 
 def file_extension(file_name: str) -> str:
     """Return the lower-case extension without the dot, e.g. 'pdf'."""
     return Path(file_name).suffix.lower().lstrip(".")
-
