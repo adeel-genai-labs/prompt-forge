@@ -5,6 +5,7 @@ that the UI can show to the user as-is.
 """
 
 import re
+from collections import Counter
 from pathlib import Path
 
 import pymupdf
@@ -181,6 +182,27 @@ def redact_pii(text: str) -> tuple[str, dict[str, int]]:
 
         text = pattern.sub(replace, text)
     return text, counts
+
+
+def redact_prompt(prompt: GeneratedPrompt) -> tuple[GeneratedPrompt, dict[str, int]]:
+    """Run redact_pii on every text field of a generated prompt; return the new prompt and total counts."""
+    totals: Counter[str] = Counter()
+
+    def redact(text: str) -> str:
+        redacted, counts = redact_pii(text)
+        totals.update(counts)
+        return redacted
+
+    redacted_prompt = prompt.model_copy(
+        update={
+            "title": redact(prompt.title),
+            "sections": {name: redact(text) for name, text in prompt.sections.items()},
+            "assumptions": [redact(text) for text in prompt.assumptions],
+            "final_prompt": redact(prompt.final_prompt),
+            "negative_prompt": redact(prompt.negative_prompt),
+        }
+    )
+    return redacted_prompt, dict(totals)
 
 
 def find_injection_attempts(text: str) -> list[str]:

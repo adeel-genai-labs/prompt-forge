@@ -18,9 +18,9 @@ from src.schema import GeneratedPrompt
 from src.targets import DEFAULT_TARGET, TARGETS
 
 SUPPORTED_PROVIDERS = {"ollama", "anthropic"}
-OLLAMA_TEXT_MODEL = os.getenv("OLLAMA_TEXT_MODEL", "llama3.2")
-OLLAMA_VISION_MODEL = os.getenv("OLLAMA_VISION_MODEL", "llama3.2-vision")
-ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5-5")
+DEFAULT_OLLAMA_TEXT_MODEL = "llama3.2"
+DEFAULT_OLLAMA_VISION_MODEL = "llama3.2-vision"
+DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5-5"
 # Low temperature keeps the JSON shape and section names stable between runs.
 TEMPERATURE = 0.2
 ANTHROPIC_MAX_TOKENS = 4096
@@ -48,6 +48,16 @@ def get_provider() -> str:
     return provider
 
 
+def model_for(provider: str, image: bool = False) -> str:
+    """Return the model name for provider, from env or the default; Ollama uses a separate vision model."""
+    # Read at call time, not import time, so values loaded later from .env or st.secrets are used.
+    if provider == "anthropic":
+        return os.getenv("ANTHROPIC_MODEL", DEFAULT_ANTHROPIC_MODEL)
+    if image:
+        return os.getenv("OLLAMA_VISION_MODEL", DEFAULT_OLLAMA_VISION_MODEL)
+    return os.getenv("OLLAMA_TEXT_MODEL", DEFAULT_OLLAMA_TEXT_MODEL)
+
+
 def generate_prompt(content: str, goal: str = "", target: str = DEFAULT_TARGET) -> GeneratedPrompt:
     """Ask the provider to turn the extracted content into a GeneratedPrompt for `target`.
 
@@ -56,14 +66,15 @@ def generate_prompt(content: str, goal: str = "", target: str = DEFAULT_TARGET) 
     """
     system = build_system_prompt(target)
     user = build_user_message(content, goal)
+    schema = GeneratedPrompt.model_json_schema()
 
     # Only parsing is inside the try blocks: provider errors (also ValueError) must not trigger a retry.
-    raw = call_model(system, user)
+    raw = call_model(system, user, json_schema=schema)
     try:
         return parse_response(raw)
     except ValueError:
         pass
-    raw = call_model(system, f"{user}\n\n{JSON_REMINDER}")
+    raw = call_model(system, f"{user}\n\n{JSON_REMINDER}", json_schema=schema)
     try:
         return parse_response(raw)
     except ValueError:
@@ -131,16 +142,24 @@ def parse_response(raw: str) -> GeneratedPrompt:
         raise ValueError(f"Model reply is not valid GeneratedPrompt JSON: {error}") from error
 
 
-def call_model(system: str, user: str, image: bytes | None = None, media_type: str = "") -> str:
-    """Send one request to the provider chosen by LLM_PROVIDER and return its text reply."""
+def call_model(
+    system: str, user: str, image: bytes | None = None, media_type: str = "", json_schema: dict | None = None
+) -> str:
+    """Send one request to the provider chosen by LLM_PROVIDER and return its text reply.
+
+    json_schema is used by Ollama only (structured outputs); Anthropic follows the system prompt.
+    """
     if get_provider() == "anthropic":
         return call_anthropic(system, user, image, media_type)
-    return call_ollama(system, user, image)
+    return call_ollama(system, user, image, json_schema)
 
 
-def call_ollama(system: str, user: str, image: bytes | None = None) -> str:
-    """Send one chat request through the ollama client; uses the vision model when an image is given."""
-    model = OLLAMA_VISION_MODEL if image else OLLAMA_TEXT_MODEL
+def call_ollama(system: str, user: str, image: bytes | None = None, json_schema: dict | None = None) -> str:
+    """Send one chat request through the ollama client; uses the vision model when an image is given.
+
+    When json_schema is given, Ollama constrains the reply to JSON matching it.
+    """
+    model = model_for("ollama", image=bool(image))
     user_message = {"role": "user", "content": user}
     if image:
         user_message["images"] = [image]
@@ -150,6 +169,7 @@ def call_ollama(system: str, user: str, image: bytes | None = None) -> str:
             model=model,
             messages=[{"role": "system", "content": system}, user_message],
             options={"temperature": TEMPERATURE},
+            format=json_schema,
         )
     except ConnectionError:
         raise RuntimeError("Can't reach Ollama. Please make sure the Ollama app is running, then try again.") from None
@@ -176,7 +196,7 @@ def call_anthropic(system: str, user: str, image: bytes | None = None, media_typ
 
     try:
         response = anthropic.Anthropic(api_key=api_key).messages.create(
-            model=ANTHROPIC_MODEL,
+            model=model_for("anthropic"),
             max_tokens=ANTHROPIC_MAX_TOKENS,
             temperature=TEMPERATURE,
             system=system,
@@ -185,7 +205,9 @@ def call_anthropic(system: str, user: str, image: bytes | None = None, media_typ
     except anthropic.AuthenticationError:
         raise RuntimeError("Anthropic rejected the API key. Please check ANTHROPIC_API_KEY in your .env file.") from None
     except anthropic.NotFoundError:
-        raise RuntimeError(f"Anthropic doesn't recognise the model '{ANTHROPIC_MODEL}'. Please check ANTHROPIC_MODEL.") from None
+        raise RuntimeError(
+            f"Anthropic doesn't recognise the model '{model_for('anthropic')}'. Please check ANTHROPIC_MODEL."
+        ) from None
     except anthropic.APIConnectionError:
         raise RuntimeError("Can't reach Anthropic. Please check your internet connection and try again.") from None
     except anthropic.APIStatusError as error:

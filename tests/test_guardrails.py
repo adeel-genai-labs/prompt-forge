@@ -202,6 +202,22 @@ def test_luhn_and_verhoeff_checksums():
     assert not guardrails.verhoeff_valid("2364")
 
 
+def test_redact_prompt_redacts_every_field_and_totals_counts():
+    prompt = make_prompt(
+        title="For a@example.com",
+        assumptions=["Contact b@example.com"],
+        final_prompt="Call +1 555-010-0199 or email a@example.com",
+    )
+    prompt.sections["Goal"] = "SSN 123-45-6789"
+    redacted, counts = guardrails.redact_prompt(prompt)
+    assert redacted.title == "For [EMAIL]"
+    assert redacted.sections["Goal"] == "SSN [US_SSN]"
+    assert redacted.assumptions == ["Contact [EMAIL]"]
+    assert redacted.final_prompt == "Call [PHONE] or email [EMAIL]"
+    assert counts == {"EMAIL": 3, "PHONE": 1, "US_SSN": 1}
+    assert prompt.title == "For a@example.com"  # original is not modified
+
+
 # --- find_injection_attempts ---
 
 

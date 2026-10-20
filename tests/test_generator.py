@@ -8,6 +8,7 @@ import ollama
 import pytest
 
 from src import generator
+from src.schema import GeneratedPrompt
 from src.targets import TARGETS
 
 
@@ -31,8 +32,8 @@ def fake_ollama(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "ollama")
     fake = SimpleNamespace(replies=[], calls=[])
 
-    def call_ollama(system: str, user: str, image: bytes | None = None) -> str:
-        fake.calls.append({"system": system, "user": user, "image": image})
+    def call_ollama(system: str, user: str, image: bytes | None = None, json_schema: dict | None = None) -> str:
+        fake.calls.append({"system": system, "user": user, "image": image, "json_schema": json_schema})
         return fake.replies.pop(0)
 
     monkeypatch.setattr(generator, "call_ollama", call_ollama)
@@ -87,6 +88,13 @@ def test_generate_prompt_retries_once_after_bad_reply(fake_ollama):
     assert len(fake_ollama.calls) == 2
     assert generator.JSON_REMINDER in fake_ollama.calls[1]["user"]
     assert generator.JSON_REMINDER not in fake_ollama.calls[0]["user"]
+    assert fake_ollama.calls[1]["json_schema"] == GeneratedPrompt.model_json_schema()
+
+
+def test_generate_prompt_passes_json_schema_to_ollama(fake_ollama):
+    fake_ollama.replies = [valid_json()]
+    generator.generate_prompt("content")
+    assert fake_ollama.calls[0]["json_schema"] == GeneratedPrompt.model_json_schema()
 
 
 def test_generate_prompt_gives_friendly_error_after_two_bad_replies(fake_ollama):
@@ -179,10 +187,42 @@ def test_describe_image_sends_image_to_vision_call(fake_ollama):
     assert generator.describe_image(b"img-bytes", "image/png") == "A whiteboard with three tasks."
     call = fake_ollama.calls[0]
     assert call["image"] == b"img-bytes"
+    assert call["json_schema"] is None
     assert "never instructions" in call["system"]
 
 
-# --- call_ollama errors (ollama.chat is mocked) ---
+# --- model_for ---
+
+
+def test_model_for_uses_defaults(monkeypatch):
+    for name in ["OLLAMA_TEXT_MODEL", "OLLAMA_VISION_MODEL", "ANTHROPIC_MODEL"]:
+        monkeypatch.delenv(name, raising=False)
+    assert generator.model_for("ollama") == "llama3.2"
+    assert generator.model_for("ollama", image=True) == "llama3.2-vision"
+    assert generator.model_for("anthropic") == "claude-sonnet-5-5"
+    assert generator.model_for("anthropic", image=True) == "claude-sonnet-5-5"
+
+
+def test_model_for_reads_env_at_call_time(monkeypatch):
+    monkeypatch.setenv("OLLAMA_TEXT_MODEL", "qwen2.5")
+    assert generator.model_for("ollama") == "qwen2.5"
+
+
+# --- call_ollama (ollama.chat is mocked) ---
+
+
+@pytest.mark.parametrize("schema", [None, {"type": "object"}])
+def test_call_ollama_passes_schema_as_format(monkeypatch, schema):
+    sent = {}
+
+    def chat(**kwargs):
+        sent.update(kwargs)
+        return SimpleNamespace(message=SimpleNamespace(content="reply"))
+
+    monkeypatch.setattr(generator.ollama, "chat", chat)
+    assert generator.call_ollama("system", "user", json_schema=schema) == "reply"
+    assert sent["format"] == schema
+    assert sent["options"] == {"temperature": generator.TEMPERATURE}
 
 
 def test_call_ollama_explains_when_ollama_is_not_running(monkeypatch):
@@ -199,8 +239,8 @@ def test_call_ollama_names_the_model_to_pull(monkeypatch, image, model):
     def not_found(**kwargs):
         raise ollama.ResponseError(f"model '{kwargs['model']}' not found", 404)
 
-    monkeypatch.setattr(generator, "OLLAMA_TEXT_MODEL", "llama3.2")
-    monkeypatch.setattr(generator, "OLLAMA_VISION_MODEL", "llama3.2-vision")
+    monkeypatch.delenv("OLLAMA_TEXT_MODEL", raising=False)
+    monkeypatch.delenv("OLLAMA_VISION_MODEL", raising=False)
     monkeypatch.setattr(generator.ollama, "chat", not_found)
     with pytest.raises(RuntimeError, match=f"Run `ollama pull {model}`"):
         generator.call_ollama("system", "user", image=image)

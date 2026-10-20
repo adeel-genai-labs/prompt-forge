@@ -199,3 +199,39 @@
 **Next steps:**
 - Implement app.py: the Streamlit flow wiring guardrails, extractors and generator, with friendly errors.
 - Run a live check with Ollama (`ollama pull llama3.2` and `ollama pull llama3.2-vision`) and with Anthropic.
+
+## 2026-10-20 — Ollama structured outputs + implement app.py
+
+**Goal:** (1) Use Ollama structured outputs (JSON schema) for prompt generation. (2) Implement the Streamlit app with a smoke test.
+
+**Files changed:**
+- src/generator.py: `call_ollama(..., json_schema=None)` passes it as `format=`; `call_model` forwards json_schema to Ollama only; `generate_prompt` passes `GeneratedPrompt.model_json_schema()` on both attempts; describe_image sends no schema. Model-name constants replaced by DEFAULT_* plus `model_for(provider, image=False)`, which reads env at call time.
+- src/guardrails.py: new `redact_prompt(prompt)`, which redacts PII in every output field and totals the counts
+- app.py: fully implemented (load_settings, render_sidebar, render_input, run_pipeline, stop_if, render_report, render_result, to_markdown, slugify, show_error, main)
+- tests/test_generator.py: fake call_ollama records json_schema; new tests for the schema on first and retry attempts, no schema for images, `format=` passed to ollama.chat, and model_for defaults and env override
+- tests/test_guardrails.py: test for redact_prompt
+- Added tests/test_app.py: AppTest smoke test with generate_prompt mocked
+
+**Commands run:**
+- `.venv\Scripts\python.exe -m pytest -v`: 163 passed
+- `.venv\Scripts\python.exe -m streamlit run app.py --server.headless true --server.port 8599`: health check OK, then stopped
+
+**Result:** The whole app is implemented. Not yet tested end to end with a real Ollama or Anthropic model.
+
+**Issues & fixes:**
+- Model names were read at import time, before app.py loads .env / st.secrets → values set in .env would be ignored → `model_for()` reads env when each call is made.
+- A multi-edit script failed halfway (one search string didn't match, because of an earlier edit) → each edit writes on its own, so the earlier ones had applied → checked the file and applied the rest.
+
+**Decisions:**
+- render_input uses `st.form` (no rerun on every keystroke) and returns None until Generate is pressed, so its return type is `tuple | None`.
+- The pipeline order lives in `run_pipeline` in app.py, as requested; guardrail failures raise ValueError through `stop_if`, so main has one place to catch errors.
+- The blocked-topic and image checks run on the goal and the content together; PII is redacted from both. Injection detection runs only on the content, since the goal is the user's own instruction.
+- Output PII redaction lives in guardrails.redact_prompt, not app.py, to keep business logic out of the UI.
+- main() also catches any other Exception, logs the traceback to the terminal and shows a generic friendly message, so users never see a raw traceback.
+- st.secrets are copied with `os.environ.setdefault`, so real environment variables win; only string values are copied.
+- The app test calls generator.generate_prompt through the module, so monkeypatch takes effect inside AppTest.
+
+**Next steps:**
+- Live run: `ollama pull llama3.2` and `ollama pull llama3.2-vision`, then `streamlit run app.py`; try each samples/ file and each target.
+- Check that claude-sonnet-5-5 accepts `temperature`.
+- v2: ask_clarifying_questions, refine_prompt.
